@@ -145,8 +145,6 @@ The project was developed for:
 - ROS 2 geometry and standard message packages
 - VRPN motion-capture topics or the provided simulator
 
-The individual controllers can also be executed separately.
-
 ## Plotting Results
 
 Generate the available evaluation plots using:
