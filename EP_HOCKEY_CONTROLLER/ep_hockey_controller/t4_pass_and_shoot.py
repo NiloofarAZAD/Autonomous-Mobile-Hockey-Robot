@@ -1482,9 +1482,7 @@ class T4PassAndShoot(Node):
         self.robot4_precontact_heading = self.robot4_shot_heading()
 
         # Measure the physical forward adjustment from Robot 4's live VRPN
-        # chassis pose.  Do not use the modeled stick-tip position here; the
-        # recordings show that the simulated effective stick reach differs
-        # from the configured geometric model.
+        # chassis pose. 
         self.robot4_precontact_start = (self.robot4.x, self.robot4.y)
         self.robot4_precontact_puck_start = (self.puck_x, self.puck_y)
         self.state_start_ns = self.get_clock().now().nanoseconds
@@ -1504,8 +1502,7 @@ class T4PassAndShoot(Node):
         The heading is frozen at the puck-to-Robot-5 direction. Translation
         pauses whenever the heading error is too large. The phase stops as
         soon as the puck moves toward Robot 5, or after the requested chassis
-        advance/timeout. Modeled stick-tip errors are logged only; they never
-        gate or redirect this straight physical approach.
+        advance/timeout. 
         """
         if (
             self.robot4_precontact_start is None
@@ -1531,8 +1528,7 @@ class T4PassAndShoot(Node):
             self.robot4_precontact_advance_distance - progress,
         )
 
-        # Diagnostic only. These modeled values are not trusted for stopping
-        # because the visible simulated stick reach does not match the model.
+
         tip_x, tip_y = self.robot4_stick_tip_position()
         tip_to_puck_x = self.puck_x - tip_x
         tip_to_puck_y = self.puck_y - tip_y
@@ -1556,10 +1552,6 @@ class T4PassAndShoot(Node):
             self.robot4_precontact_heading - self.robot4.theta
         )
 
-        # Begin the physical approach as soon as Robot 4 reaches the useful
-        # staging pose.  Small heading errors are corrected while advancing;
-        # only a genuinely large error pauses translation.  This avoids the
-        # long separate alignment delay seen in the simulator near second 7.
         abs_heading_error = abs(heading_error)
         soft_heading_gate = 0.5 * self.robot4_precontact_heading_gate
 
@@ -1646,10 +1638,6 @@ class T4PassAndShoot(Node):
         behind the heading gate.
         """
         self.robot4_manual_forward_heading = self.robot4.theta
-
-        # Do not establish the translation origin yet. It is established only
-        # after the body heading enters the allowed gate, so alignment motion
-        # cannot consume the requested forward distance or translation timeout.
         self.robot4_manual_forward_start = None
         self.robot4_manual_forward_puck_start = None
         self.robot4_manual_translation_started = False
@@ -1664,8 +1652,7 @@ class T4PassAndShoot(Node):
             self.robot4_manual_forward_distance
             / self.robot4_manual_forward_speed
         )
-        # Account for the intentional near-target slowdown and heading
-        # corrections. The ideal distance/speed time is too optimistic.
+        # Account for the intentional near-target slowdown and heading corrections.
         effective_translation_timeout = max(
             self.robot4_manual_forward_timeout,
             2.0 * nominal_translation_time + 2.0,
@@ -1687,8 +1674,7 @@ class T4PassAndShoot(Node):
     ) -> Tuple[bool, bool, float, float]:
         """Align first, then move the requested measured forward distance.
 
-        Returns (finished, succeeded, progress, remaining). A timeout is a
-        failure and must never be interpreted as permission to start the shot.
+        Returns (finished, succeeded, progress, remaining). 
         """
         if (
             self.robot4_manual_forward_heading is None
@@ -1794,14 +1780,13 @@ class T4PassAndShoot(Node):
         )
 
         # Preserve heading during translation. Pause only for a genuinely large
-        # error; small errors are corrected while continuing forward.
+        # error, small errors are corrected while continuing forward.
         hard_heading_gate = max(
             math.radians(25.0),
             2.0 * self.robot4_manual_forward_heading_gate,
         )
         if abs(heading_error) > hard_heading_gate:
-            # Stop only if the robot has genuinely lost the frozen approach
-            # direction. Small and moderate errors are corrected while moving.
+            # Stop only if the robot has genuinely lost the frozen approach direction. 
             linear_speed = 0.0
         elif remaining <= 0.0:
             linear_speed = 0.0
@@ -1849,8 +1834,7 @@ class T4PassAndShoot(Node):
             self.robot4_manual_forward_distance
             / self.robot4_manual_forward_speed
         )
-        # Account for the intentional near-target slowdown and heading
-        # corrections. The ideal distance/speed time is too optimistic.
+        # Account for the intentional near-target slowdown and heading corrections.
         effective_translation_timeout = max(
             self.robot4_manual_forward_timeout,
             2.0 * nominal_translation_time + 2.0,
@@ -2096,8 +2080,6 @@ class T4PassAndShoot(Node):
             self.robot4_pass_heading - self.robot4.theta
         )
 
-        # Do not let a large heading error produce another curved/orbiting path.
-        # Pause translation and recover the frozen shooting heading first.
         heading_gate = math.radians(8.0)
         linear_speed = self.contact_max_v
         if abs(heading_error) > heading_gate:
@@ -2191,9 +2173,7 @@ class T4PassAndShoot(Node):
         Select clockwise or counterclockwise shooting automatically.
 
         The chosen sign makes the tangential velocity of the stick tip
-        point from Robot 4 toward Robot 5. This is required because the
-        opposite perpendicular staging point needs the opposite rotation
-        direction.
+        point from Robot 4 toward Robot 5. 
         """
         receiver_x, receiver_y = self.live_receiver_position()
 
@@ -2271,7 +2251,7 @@ class T4PassAndShoot(Node):
 
         cmd = Twist()
         cmd.linear.x = 0.0
-        cmd.angular.z = abs(self.robot4_backswing_max_w)  # Always CCW.
+        cmd.angular.z = abs(self.robot4_backswing_max_w) 
         self.robot4_cmd_pub.publish(cmd)
         return False, ccw_progress
 
@@ -2373,8 +2353,7 @@ class T4PassAndShoot(Node):
         )
         angular_progress = max(0.0, angular_progress)
 
-        # Full strike speed is commanded from the first clockwise control
-        # cycle. There is no ramp after contact.
+        # Full strike speed is commanded from the first clockwise control cycle.
         angular_speed = self.robot4_swing_max_w
 
         puck_motion = 0.0
@@ -2525,8 +2504,6 @@ class T4PassAndShoot(Node):
                 desired_heading,
             )
             if aligned:
-                # Robot 5 is now stationary at the receiving pose. Compute
-                # and freeze Robot 4's point directly behind the puck once.
                 self.robot4_stage_target = (
                     self.robot4_perpendicular_stage_point()
                 )
@@ -2685,8 +2662,6 @@ class T4PassAndShoot(Node):
                 self.transition_to(self.BACKSWING_R4)
                 self.begin_robot4_ccw_preload()
             elif finished:
-                # A failed alignment or translation must not trigger a blind
-                # shot. Hold both robots safely in the current state.
                 self.stop_both()
             return
 

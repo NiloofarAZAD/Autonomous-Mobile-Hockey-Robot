@@ -83,8 +83,6 @@ class T1Navigate(Node):
        self.declare_parameter('include_pucks_as_obstacles', True)
 
        # CLF-CBF-QP parameters.
-       # Existing navigation, geometry, tolerance, and velocity parameters
-       # above are intentionally unchanged.
        self.declare_parameter('clf_rate', 1.0)
        self.declare_parameter('cbf_rate', 2.0)
        self.declare_parameter('clf_slack_weight', 1000.0)
@@ -99,8 +97,7 @@ class T1Navigate(Node):
        # Stick pickup geometry
        # ------------------------------------------------------------
        #
-       # The VRPN pose is normally at the stick rigid-body origin,
-       # which may not be the location that the gripper should reach.
+       # The VRPN pose is at the stick rigid-body origin,
        #
        # longitudinal offset:
        #   displacement along the stick local x-axis
@@ -108,7 +105,6 @@ class T1Navigate(Node):
        # lateral offset:
        #   displacement along the stick local y-axis
        #
-       # Both values can be positive or negative.
        self.declare_parameter(
            'stick_pickup_longitudinal_offset',
            0.60
@@ -118,7 +114,7 @@ class T1Navigate(Node):
            0.08
        )
        # First navigate to a point behind the pickup point, then move
-       # forward to the pickup point. This creates a cleaner approach.
+       # forward to the pickup point.
        self.declare_parameter('stick_approach_distance', 0.15)
        # ============================================================
        # Read parameters
@@ -337,7 +333,6 @@ class T1Navigate(Node):
            self.obstacle_subscriptions.append(subscription)
            self.subscribed_obstacle_topics.add(topic)
 
-       # Discover simulator object topics, including suffixed names.
        self.obstacle_discovery_timer = self.create_timer(
            0.50,
            self.discover_object_obstacle_topics,
@@ -387,7 +382,6 @@ class T1Navigate(Node):
        """Return statically known obstacle topics."""
        specs: list[Tuple[str, float]] = []
 
-       # Other RoboMaster robots are always known by ID.
        for robot_id in range(1, 11):
            if robot_id == self.robot_id:
                continue
@@ -397,15 +391,11 @@ class T1Navigate(Node):
                self.other_robot_radius,
            ))
 
-       # Pucks and stick rigid bodies are discovered dynamically because
-       # the simulator may append suffixes such as "_2".
        return specs
 
    def discover_object_obstacle_topics(self) -> None:
        """
        Discover all tracked hockey pucks and stick rigid bodies.
-
-       Examples handled:
            hockey_puck_blue
            hockey_puck_blue_2
            hockey_sticks_1
@@ -430,10 +420,7 @@ class T1Navigate(Node):
            if topic_name in self.subscribed_obstacle_topics:
                continue
 
-           # The selected stick is the T1 target. It must not be treated
-           # as an obstacle, otherwise the robot cannot reach the pickup
-           # point or rotate for the final alignment. Other stick rigid
-           # bodies are still treated as obstacles.
+           # The selected stick is the T1, which is not treated as an obstacle. Other stick rigid bodies are treated as obstacles.
            if topic_name == self.stick_topic:
                continue
 
@@ -516,7 +503,7 @@ class T1Navigate(Node):
        self
    ) -> Tuple[float, float]:
        """
-       Convert the stick rigid-body pose into the desired pickup point.
+       Convert the stick rigid-body pose into the pickup point.
        Stick local coordinates:
            local x: along the stick
            local y: perpendicular to the stick
@@ -635,7 +622,6 @@ class T1Navigate(Node):
        return active, emergency_stop_required
 
    def rotation_is_safe(self) -> bool:
-       """Check the full chassis/controlled-point rotation footprint."""
        now_ns = self.get_clock().now().nanoseconds
        timeout_ns = int(self.obstacle_timeout * 1e9)
 
@@ -828,7 +814,6 @@ class T1Navigate(Node):
        g_matrix = np.asarray(g_rows, dtype=float)
        h_vector = np.asarray(h_values, dtype=float)
 
-       # Try the configured solver first, then common installed backends.
        solver_candidates = []
        for solver_name in (
            self.qp_solver,
@@ -1089,7 +1074,6 @@ class T1Navigate(Node):
        cmd.angular.z = omega
        self.cmd_pub.publish(cmd)
    def stop_robot(self) -> None:
-       # Explicitly command a complete chassis stop.
        cmd = Twist()
        cmd.linear.x = 0.0
        cmd.linear.y = 0.0

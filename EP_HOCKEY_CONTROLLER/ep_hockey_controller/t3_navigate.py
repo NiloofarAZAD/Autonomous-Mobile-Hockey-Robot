@@ -86,15 +86,13 @@ class T3Navigate(Node):
        self.declare_parameter('include_pucks_as_obstacles', True)
 
        # CLF-CBF-QP parameters.
-       # Existing navigation, geometry, tolerance, and velocity parameters
-       # above are intentionally unchanged.
        self.declare_parameter('clf_rate', 1.0)
        self.declare_parameter('cbf_rate', 2.0)
        self.declare_parameter('clf_slack_weight', 1000.0)
        self.declare_parameter('qp_solver', 'quadprog')
 
        # Selected green-puck VRPN topic. This target puck is excluded
-       # from the CBF obstacle set; other pucks remain obstacles.
+       # from the CBF obstacle set, other pucks remain obstacles.
        self.declare_parameter(
            'puck_topic',
            '/vrpn_mocap/hockey_puck_green/pose'
@@ -376,7 +374,6 @@ class T3Navigate(Node):
        """Return statically known obstacle topics."""
        specs: list[Tuple[str, float]] = []
 
-       # Other RoboMaster robots are always known by ID.
        for robot_id in range(1, 11):
            if robot_id == self.robot_id:
                continue
@@ -386,15 +383,11 @@ class T3Navigate(Node):
                self.other_robot_radius,
            ))
 
-       # Pucks and stick rigid bodies are discovered dynamically because
-       # the simulator may append suffixes such as "_2".
        return specs
 
    def discover_object_obstacle_topics(self) -> None:
        """
        Discover all tracked hockey pucks and stick rigid bodies.
-
-       Examples handled:
            hockey_puck_blue
            hockey_puck_blue_2
            hockey_sticks_1
@@ -419,8 +412,7 @@ class T3Navigate(Node):
            if topic_name in self.subscribed_obstacle_topics:
                continue
 
-           # The selected green puck is the T3 target, so it must not be
-           # treated as an obstacle. Other pucks and sticks remain obstacles.
+           # The selected green puck is the T3 target, so it is not be treated as an obstacle. Other pucks and sticks remain obstacles.
            if topic_name == self.puck_topic:
                continue
 
@@ -954,7 +946,6 @@ class T3Navigate(Node):
                    'before handoff.'
                )
                return
-           # Keep translation locked to zero while theta is corrected.
            omega = clamp(
                self.k_heading * theta_error,
                -self.max_w,
@@ -967,7 +958,6 @@ class T3Navigate(Node):
            return
 
        # Nominal stabilizing velocity for the controlled point p.
-       # The original attractive gain is preserved.
        nominal_ux = self.k_att * error_x
        nominal_uy = self.k_att * error_y
 
