@@ -63,16 +63,68 @@ Obstacle avoidance is applied within the T1, T3, and T4 tasks.
 ## Project/repository Structure
 
 The project was developed and executed in the **RoboHub** environment using ROS 2 packages and the RoboMaster simulator.
-
+all the files related to the ros 2 package and simulation are as follows:
 - **ROS 2 Controller Package:**
-  [`EP_HOCKEY_CONTROLLER`]
+  [`EP_HOCKEY_CONTROLLER`]:
+
+  
+  
 - **RoboMaster Simulation Package:**
   [`multi_robomaster_ros_sim`]
 
 
+````markdown
+## Project/Repository Structure
+
+The project was developed and executed in the **RoboHub** environment using ROS 2 packages and the RoboMaster simulator.
+
+The main directories and their file structures are shown below.
+
+### ROS 2 Controller Package
+
+`EP_HOCKEY_CONTROLLER/`
+
+```text
+EP_HOCKEY_CONTROLLER/
+├── ep_hockey_controller/
+│   ├── t1_navigate.py
+│   ├── t2_pickup.py
+│   ├── t3_navigate.py
+│   └── t4_pass_and_shoot.py
+├── launch/
+│   ├── t1_navigate_launch.py
+│   ├── t2_pickup_launch.py
+│   ├── t3_navigate_launch.py
+│   └── t4_pass_and_shoot_launch.py
+├── package.xml
+└── setup.py
+```
+
+### RoboMaster Simulation Package
+
+`multi_robomaster_ros_sim/`
+
+```text
+multi_robomaster_ros_sim/
+├── T1_R4.py
+├── T1_R5.py
+├── T3_navigate_puck.py
+├── T4_R4R5-pass_R5-goal.py
+└── simulator_env.py
+```
+````
+
+
+
+## Plots
+- robot trajectories,
+- state evolution,
+- linear velocity,
+- angular velocity,
+- position convergence, and
+- obstacle-clearance behavior.
 
 ## Main Features
-
 - Cooperative control of two DJI RoboMaster EP robots
 - ROS 2 Humble implementation in Python
 - VRPN motion-capture pose feedback
@@ -89,19 +141,6 @@ The project was developed and executed in the **RoboHub** environment using ROS 
 - Emergency stopping and velocity constraints
 - CSV trajectory and control-data logging
 - Plotting utilities for controller evaluation
-
-
-## Plotting Results
-- robot trajectories,
-- state evolution,
-- linear velocity,
-- angular velocity,
-- position convergence, and
-- obstacle-clearance behavior.
-
-
-
-only this
 
 ## Requirements
 The project was developed for:
