@@ -6,38 +6,22 @@ Robot 4 approaches and acquires a hockey stick, navigates behind the green puck,
 
 ## Project Objective
 
-The objective is to coordinate two unicycle-type mobile robots to complete the following sequence:
+This project implements an autonomous mobile hockey robot capable of completing a full hockey task sequence using feedback control, motion planning, and obstacle avoidance. The robot autonomously navigates through the environment, manipulates a hockey stick, interacts with the puck, and performs passing and shooting actions while maintaining safe motion around obstacles.
 
-1. Robot 4 navigates to and acquires the left hockey stick.
-2. Robot 5 navigates to and acquires the right hockey stick.
-3. Robot 4 navigates to a staging position behind the green puck.
-4. Robot 5 moves to a receiving position near the goal.
-5. Robot 4 passes the puck to Robot 5.
-6. Robot 5 detects the received puck.
-7. Robot 5 moves behind the puck relative to the goal.
-8. Robot 5 aligns with the goal and shoots.
-9. Both robots stop safely.
+The navigation and manipulation framework combines the following control methods:
 
-During navigation, the robots avoid other robots, non-target pucks, and non-target sticks.
+- **Approximate Input–Output Linearization:** Used for differential-drive trajectory tracking, waypoint navigation, and accurate positioning during approach, passing, and shooting tasks.
 
-## Main Features
+- **Closed-Loop Feedback Control:** Uses real-time motion-capture data from the VRPN system to continuously estimate the robot pose, correct motion errors, and improve tracking accuracy.
 
-- Cooperative control of two DJI RoboMaster EP robots
-- ROS 2 Humble implementation in Python
-- VRPN motion-capture pose feedback
-- Unicycle robot modeling
-- Virtual controlled-point formulation
-- Approximate input-output linearization
-- CLF-CBF-QP navigation and obstacle avoidance
-- Quadratic-program-based velocity optimization
-- Automatic stick-side selection
-- Simulator stick attachment
-- Geometry-based puck staging
-- Closed-loop passing and shooting strokes
-- State-machine-based task coordination
-- Emergency stopping and velocity constraints
-- CSV trajectory and control-data logging
-- Plotting utilities for controller evaluation
+- **CLF-CBF-QP-Based Control:** Generates safe linear and angular velocity commands by combining:
+  - A **Control Lyapunov Function (CLF)** to drive the robot toward its target.
+  - **Control Barrier Functions (CBFs)** to enforce collision-avoidance and safety constraints.
+  - A **Quadratic Program (QP)** to compute control inputs that balance task completion and safe navigation.
+
+
+
+
 
 ## Task Sequence
 
