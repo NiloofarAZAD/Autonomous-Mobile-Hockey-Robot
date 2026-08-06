@@ -92,19 +92,18 @@ Obstacle avoidance is applied within the T1, T3, and T4 tasks.
 - position convergence, and
 - obstacle-clearance behavior.
 
-## Repository Structure
-| File | Purpose |
-|---|---|
-| `T1_R4.py` | Robot 4 navigation to and acquisition of the left stick |
-| `T1_R5.py` | Robot 5 navigation to and acquisition of the right stick |
-| `T3.py` | Robot 4 navigation to a staging point behind the green puck |
-| `T4.py` | Cooperative passing and shooting state machine |
-| `simulator_env.py` | Mobile-hockey simulation environment |
-| `plot_trajectory.py` | Robot \(x\)-\(y\) trajectory visualization |
-| `plot_t_states.py` | Robot state plots \(x(t)\), \(y(t)\), and \(\theta(t)\) |
-| `plot_controls.py` | Linear- and angular-velocity plots |
-| `plot_position_error.py` | Position-error-versus-time plot |
-| `plot_obstacle_clearance.py` | Obstacle-clearance-versus-time plot |
+## Project Structure
+## Project Structure
+
+The project was developed and executed in the **RoboHub** environment using ROS 2 packages and the RoboMaster simulator.
+
+- **ROS 2 Controller Package:**
+  [`EP_HOCKEY_CONTROLLER`]
+
+- **RoboMaster Simulation Package:**
+  [`multi_robomaster_ros_sim`]
+
+only this
 
 ## Requirements
 The project was developed for:
