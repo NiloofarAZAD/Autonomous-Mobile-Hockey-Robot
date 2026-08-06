@@ -17,13 +17,47 @@ The navigation and pick-up framework combines the following control methods:
 
 ## Task Sequence
 
-### T1 — Stick Acquisition
+## T1 — Navigating to a Known Stick Pick-Up Location
 
-### T2 — Stick Acquisition
+1. Wait for the robot and the selected stick VRPN poses.
+2. Navigate to an approach point behind the stick.
+3. Move forward to the calculated stick pick-up point.
+4. Stop translation and align the robot with the stick.
+5. Hold the robot in the stopped position briefly, then hand control to T2.
 
-### T3 — Navigate to the Puck
+## T2 — Picking Up a Stick
 
-### T4 — Pass and Shoot
+1. Move the arm upward to the stick height.
+2. Open the gripper.
+3. Move the arm forward toward the stick.
+4. Close the gripper and wait for a secure grip.
+5. Lift the arm with the stick.
+6. Move the robot backward approximately `0.40 m`, stop, and complete T2.
+
+## T3 — Navigating to a Known Puck Location
+
+1. Wait for the Robot 4 and green-puck poses.
+2. Calculate an approach point near the known green-puck position.
+3. Navigate Robot 4 to the approach point while avoiding obstacles.
+4. Move Robot 4 to the final staging position beside or behind the puck.
+5. Stop Robot 4 and hand control to T4.
+
+## T4 — Passing and Shooting
+
+1. Wait for the Robot 4, Robot 5, and green-puck poses.
+2. Move Robot 5 to the receiving location.
+3. Align Robot 5 for the incoming pass.
+4. Align Robot 4 and its stick with the puck and Robot 5.
+5. Robot 4 passes the puck to Robot 5.
+6. Confirm that Robot 5 has received the puck.
+7. Move Robot 5 behind the puck relative to the known goal location.
+8. Align Robot 5 with the goal.
+9. Robot 5 shoots the puck into the goal.
+10. Stop both robots and complete the task.
+
+## T5 — Avoiding Obstacles Placed at Known Locations
+
+Obstacle avoidance is applied within the T1, T3, and T4 tasks.
 
 
 
