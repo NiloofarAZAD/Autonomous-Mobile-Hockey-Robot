@@ -64,7 +64,7 @@ Obstacle avoidance is applied within the T1, T3, and T4 tasks.
 
 The project was developed and executed in the **RoboHub** environment using ROS 2 packages and the RoboMaster simulator. The main directories and their file structures are shown below.
 
-### ROS 2 Controller Package
+### ROS-2 Controller Package
 
 `EP_HOCKEY_CONTROLLER`
 
@@ -96,40 +96,6 @@ multi_robomaster_ros_sim/
 ├── T4_R4R5-pass_R5-goal.py
 └── simulator_env.py
 ```
-
-
-
-
-
-
-
-
-
-## Plots
-- robot trajectories,
-- state evolution,
-- linear velocity,
-- angular velocity,
-- position convergence, and
-- obstacle-clearance behavior.
-
-## Main Features
-- Cooperative control of two DJI RoboMaster EP robots
-- ROS 2 Humble implementation in Python
-- VRPN motion-capture pose feedback
-- Unicycle robot modeling
-- Virtual controlled-point formulation
-- Approximate input-output linearization
-- CLF-CBF-QP navigation and obstacle avoidance
-- Quadratic-program-based velocity optimization
-- Automatic stick-side selection
-- Simulator stick attachment
-- Geometry-based puck staging
-- Closed-loop passing and shooting strokes
-- State-machine-based task coordination
-- Emergency stopping and velocity constraints
-- CSV trajectory and control-data logging
-- Plotting utilities for controller evaluation
 
 ## Requirements
 The project was developed for:
