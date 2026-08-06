@@ -17,7 +17,7 @@ The navigation and pick-up framework combines the following control methods:
 
 ## Task Sequence
 
-## T1 — Navigating to a Known Stick Pick-Up Location
+**T1 — Navigating to a Known Stick Pick-Up Location**
 
 1. Wait for the robot and the selected stick VRPN poses.
 2. Navigate to an approach point behind the stick.
@@ -25,7 +25,7 @@ The navigation and pick-up framework combines the following control methods:
 4. Stop translation and align the robot with the stick.
 5. Hold the robot in the stopped position briefly, then hand control to T2.
 
-## T2 — Picking Up a Stick
+**T2 — Picking Up a Stick**
 
 1. Move the arm upward to the stick height.
 2. Open the gripper.
@@ -34,7 +34,7 @@ The navigation and pick-up framework combines the following control methods:
 5. Lift the arm with the stick.
 6. Move the robot backward approximately `0.40 m`, stop, and complete T2.
 
-## T3 — Navigating to a Known Puck Location
+**T3 — Navigating to a Known Puck Location**
 
 1. Wait for the Robot 4 and green-puck poses.
 2. Calculate an approach point near the known green-puck position.
@@ -42,7 +42,7 @@ The navigation and pick-up framework combines the following control methods:
 4. Move Robot 4 to the final staging position beside or behind the puck.
 5. Stop Robot 4 and hand control to T4.
 
-## T4 — Passing and Shooting
+**T4 — Passing and Shooting**
 
 1. Wait for the Robot 4, Robot 5, and green-puck poses.
 2. Move Robot 5 to the receiving location.
@@ -55,7 +55,7 @@ The navigation and pick-up framework combines the following control methods:
 9. Robot 5 shoots the puck into the goal.
 10. Stop both robots and complete the task.
 
-## T5 — Avoiding Obstacles Placed at Known Locations
+**T5 — Avoiding Obstacles Placed at Known Locations**
 
 Obstacle avoidance is applied within the T1, T3, and T4 tasks.
 
