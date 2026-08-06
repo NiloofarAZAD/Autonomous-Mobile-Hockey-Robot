@@ -30,9 +30,33 @@ The navigation and pick-up framework combines the following control methods:
 
 
 
+## Main Features
+
+- Cooperative control of two DJI RoboMaster EP robots
+- ROS 2 Humble implementation in Python
+- VRPN motion-capture pose feedback
+- Unicycle robot modeling
+- Virtual controlled-point formulation
+- Approximate input-output linearization
+- CLF-CBF-QP navigation and obstacle avoidance
+- Quadratic-program-based velocity optimization
+- Automatic stick-side selection
+- Simulator stick attachment
+- Geometry-based puck staging
+- Closed-loop passing and shooting strokes
+- State-machine-based task coordination
+- Emergency stopping and velocity constraints
+- CSV trajectory and control-data logging
+- Plotting utilities for controller evaluation
 
 
-
+## Plotting Results
+- robot trajectories,
+- state evolution,
+- linear velocity,
+- angular velocity,
+- position convergence, and
+- obstacle-clearance behavior.
 
 ## Repository Structure
 | File | Purpose |
@@ -59,14 +83,6 @@ The project was developed for:
 - Matplotlib
 - ROS 2 geometry and standard message packages
 - VRPN motion-capture topics or the provided simulator
-
-## Plotting Results
-- robot trajectories,
-- state evolution,
-- linear velocity,
-- angular velocity,
-- position convergence, and
-- obstacle-clearance behavior.
 
 ## Course
 Developed as an ECE 687 graduate project at the University of Waterloo.
