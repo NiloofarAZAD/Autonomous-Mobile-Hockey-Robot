@@ -60,12 +60,14 @@ The navigation and pick-up framework combines the following control methods:
 Obstacle avoidance is applied within the T1, T3, and T4 tasks.
 
 
-## Project/repository Structure
+## Project/Repository Structure
 
-The project was developed and executed in the **RoboHub** environment using ROS 2 packages and the RoboMaster simulator.
-The main directories and their file structures are shown below.
-- **ROS 2 Controller Package:**
-  [`EP_HOCKEY_CONTROLLER`]:
+The project was developed and executed in the **RoboHub** environment using ROS 2 packages and the RoboMaster simulator. The main directories and their file structures are shown below.
+
+### ROS 2 Controller Package
+
+`EP_HOCKEY_CONTROLLER`
+
 ```text
 EP_HOCKEY_CONTROLLER/
 ├── ep_hockey_controller/
@@ -81,10 +83,11 @@ EP_HOCKEY_CONTROLLER/
 ├── package.xml
 └── setup.py
 ```
-  
-  
-- **RoboMaster Simulation Package:**
-  [`multi_robomaster_ros_sim`]
+
+### RoboMaster Simulation Package
+
+`multi_robomaster_ros_sim`
+
 ```text
 multi_robomaster_ros_sim/
 ├── T1_R4.py
