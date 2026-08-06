@@ -1,23 +1,17 @@
 # Autonomous-Mobile-Hockey-Robot
 
-This project implements a cooperative mobile-hockey task using two DJI RoboMaster EP robots, ROS 2, Python, approximate input-output linearization, and CLF-CBF-QP-based obstacle avoidance.
-
-Robot 4 approaches and acquires a hockey stick, navigates behind the green puck, and passes the puck to Robot 5. Robot 5 independently acquires its stick, moves to a receiving position, receives the pass, repositions behind the puck, and shoots it into the goal.
-
 ## Project Objective
 
-This project implements an autonomous mobile hockey robot capable of completing a full hockey task sequence using feedback control, motion planning, and obstacle avoidance. The robot autonomously navigates through the environment, manipulates a hockey stick, interacts with the puck, and performs passing and shooting actions while maintaining safe motion around obstacles.
+This project implements an autonomous mobile hockey robot capable of completing a full hockey task sequence using feedback control, motion planning, and obstacle avoidance. The robot autonomously navigates through the environment, picks up a hockey stick, interacts with the puck, and performs passing and shooting actions while maintaining safe motion around obstacles.
 
-The navigation and manipulation framework combines the following control methods:
+The navigation and pick-up framework combines the following control methods:
 
-- **Approximate Input–Output Linearization:** Used for differential-drive trajectory tracking, waypoint navigation, and accurate positioning during approach, passing, and shooting tasks.
-
-- **Closed-Loop Feedback Control:** Uses real-time motion-capture data from the VRPN system to continuously estimate the robot pose, correct motion errors, and improve tracking accuracy.
-
-- **CLF-CBF-QP-Based Control:** Generates safe linear and angular velocity commands by combining:
-  - A **Control Lyapunov Function (CLF)** to drive the robot toward its target.
-  - **Control Barrier Functions (CBFs)** to enforce collision-avoidance and safety constraints.
-  - A **Quadratic Program (QP)** to compute control inputs that balance task completion and safe navigation.
+- **Approximate Input–Output Linearization**
+- **Closed-Loop Feedback Control** 
+- **CLF-CBF-QP-Based Control:** 
+  - **Control Lyapunov Function (CLF)** 
+  - **Control Barrier Functions (CBFs)**
+  - **Quadratic Program (QP)**
 
 
 
