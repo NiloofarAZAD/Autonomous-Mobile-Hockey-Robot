@@ -1,6 +1,6 @@
 cat > /tmp/t4.py <<'PY'
-import math
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -63,7 +63,10 @@ class T4PassAndShoot(Node):
     WAIT_FOR_PUCK_AT_R5 = 'wait_for_puck_at_r5'
     MOVE_R5_TO_GOAL_STAGE = 'move_r5_to_goal_stage'
     ALIGN_R5_TO_GOAL = 'align_r5_to_goal'
+    MANUAL_FORWARD_R5 = 'manual_forward_r5'
+    BACKSWING_R5 = 'backswing_r5'
     SHOOT_WITH_R5 = 'shoot_with_r5'
+    WAIT_FOR_PUCK_AT_GOAL = 'wait_for_puck_at_goal'
     COMPLETE = 'complete'
 
     def __init__(self) -> None:
@@ -78,23 +81,41 @@ class T4PassAndShoot(Node):
             'puck_topic',
             '/vrpn_mocap/hockey_puck_green/pose',
         )
-
+        # Simulator-only puck output and motion model. The live VRPN topic
+        # supplies the initial puck pose; after a strike, this node propagates
+        # and publishes the simulated puck pose.
         self.declare_parameter(
             'simulated_puck_topic',
             '/sim/hockey_puck_green/pose',
         )
-        self.declare_parameter('pass_puck_speed', 0.80)
-        self.declare_parameter('shot_puck_speed', 1.00)
-        self.declare_parameter('puck_linear_drag', 1.15)
+        self.declare_parameter('pass_puck_speed', 0.55)
+        self.declare_parameter('shot_puck_speed', 1.05)
+        self.declare_parameter('puck_linear_drag', 0.90)
         self.declare_parameter('puck_minimum_speed', 0.03)
-
+        # Fraction of Robot 4 stick-tip impact speed transferred to the puck.
+        # The result is still capped by pass_puck_speed.
+        self.declare_parameter(
+            'robot4_puck_velocity_transfer_gain',
+            1.00,
+        )
+        # Fixed integration step matching the 50 Hz puck timer. This makes
+        # stopping distance repeatable instead of depending on timer jitter.
+        self.declare_parameter('puck_simulation_dt', 0.02)
         self.declare_parameter('goal_x', 2.0)
         self.declare_parameter('goal_y', 0.0)
+        # Optional live VRPN goal marker. Override this parameter if your
+        # simulator uses a different goal rigid-body topic.
+        self.declare_parameter(
+            'goal_topic',
+            '/vrpn_mocap/hockey_goal/pose',
+        )
 
         # Receiver position relative to puck-to-goal geometry.
         self.declare_parameter('receiver_backoff', 0.70)
         self.declare_parameter('receiver_right_offset', 0.60)
         self.declare_parameter('receiver_heading_offset_deg', 0.0)
+        self.declare_parameter('robot5_initial_backup_distance', 0.08)
+        self.declare_parameter('robot5_initial_backup_speed', 0.04)
 
         # Prevent a large circular path when Robot 5 begins T4 with a
         # heading inherited from T1/T3.
@@ -125,10 +146,10 @@ class T4PassAndShoot(Node):
         self.declare_parameter('position_tolerance', 0.05)
         self.declare_parameter('heading_tolerance_deg', 5.0)
         self.declare_parameter('heading_gain', 0.40)
-        self.declare_parameter('attractive_gain', 0.40)
+        self.declare_parameter('attractive_gain', 0.50)
 
-        self.declare_parameter('max_v', 0.25)
-        self.declare_parameter('max_w', 0.25)
+        self.declare_parameter('max_v', 0.30)
+        self.declare_parameter('max_w', 0.29)
         self.declare_parameter('max_cartesian_speed', 0.40)
 
         self.declare_parameter('own_robot_radius', 0.15)
@@ -217,6 +238,91 @@ class T4PassAndShoot(Node):
         )
         self.declare_parameter('robot4_swing_timeout', 2.5)
 
+        # Robot-5 rotational goal-shot parameters. The final shot is explicitly
+        # a counterclockwise preload followed by a full-speed clockwise strike.
+        self.declare_parameter('robot5_stick_angle_offset_deg', 36.0)
+        self.declare_parameter('robot5_preload_angle_deg', 18.0)
+        self.declare_parameter('robot5_follow_through_angle_deg', 18.0)
+        self.declare_parameter('robot5_preload_w', 0.30)
+        self.declare_parameter('robot5_strike_w', 1.00)
+        self.declare_parameter('robot5_swing_forward_speed', 0.010)
+        self.declare_parameter('robot5_swing_timeout', 2.5)
+
+        # Short measured advance before Robot 5's rotational strike.
+        # This closes the observed gap between the stick tip and green puck
+        # without re-running a global navigation or heading-alignment stage.
+        self.declare_parameter('robot5_manual_forward_distance', 0.060)
+        self.declare_parameter('robot5_manual_forward_speed', 0.030)
+        self.declare_parameter('robot5_manual_forward_timeout', 6.0)
+
+        # During the direct forward approach, rotate only this small bounded
+        # angle counterclockwise. After reaching it, omega becomes zero.
+        self.declare_parameter('robot5_forward_left_arc_deg', 6.0)
+        self.declare_parameter('robot5_forward_left_arc_distance', 0.18)
+        self.declare_parameter('robot5_forward_left_arc_kp', 1.10)
+        self.declare_parameter('robot5_forward_left_arc_max_w', 0.035)
+        self.declare_parameter(
+            'robot5_manual_forward_completion_tolerance',
+            0.010,
+        )
+        self.declare_parameter(
+            'robot5_manual_forward_heading_gain',
+            0.80,
+        )
+        self.declare_parameter(
+            'robot5_manual_forward_max_w',
+            0.04,
+        )
+        # Exact physical-stick pre-contact geometry for Robot 5.
+        self.declare_parameter('robot5_tip_precontact_gap', 0.018)
+        self.declare_parameter('robot5_tip_lateral_tolerance', 0.035)
+        # The rendered stick is slightly shorter than the geometric model.
+        # Move the desired visible tip this far through the puck center along
+        # the live puck-to-goal line. This does not alter body heading.
+        self.declare_parameter(
+            'robot5_visible_tip_contact_compensation',
+            0.055,
+        )
+        # Shift the compensated Robot 5 body target toward the live goal.
+        # In the current arena this is the requested rightward movement.
+        self.declare_parameter('robot5_goal_line_body_shift', 0.050)
+        # Additional visible-stick compensation used by the adaptive final
+        # translation correction, along the live puck-to-goal line.
+        self.declare_parameter('robot5_rendered_tip_compensation', 0.035)
+        # Extra straight travel needed for the rendered stick to physically
+        # reach the puck. The approach still stops early if puck motion begins.
+        self.declare_parameter('robot5_direct_contact_margin', 0.105)
+        # Desired final chassis-center distance from the puck. This compensates
+        # for the rendered stick being shorter than the geometric tip model.
+        self.declare_parameter(
+            'robot5_desired_chassis_puck_distance',
+            0.50,
+        )
+        self.declare_parameter('robot5_contact_stage_distance', 0.24)
+        self.declare_parameter('robot5_contact_stage_tolerance', 0.035)
+        self.declare_parameter('robot5_contact_stage_max_v', 0.10)
+        self.declare_parameter('robot5_contact_stage_max_w', 0.15)
+        self.declare_parameter('robot5_contact_target_tolerance', 0.020)
+        self.declare_parameter('robot5_contact_approach_max_v', 0.055)
+        self.declare_parameter('robot5_contact_approach_max_w', 0.10)
+
+        # Robot-5-only goal-shot staging geometry.
+        # Backoff is measured opposite the live puck-to-goal direction.
+        # Positive left offset places Robot 5 on the left side of that line.
+        self.declare_parameter('robot5_goal_stage_backoff', 0.50)
+        self.declare_parameter('robot5_goal_stage_left_offset', 0.00)
+        self.declare_parameter('robot5_goal_stage_tolerance', 0.025)
+        self.declare_parameter('robot5_goal_stage_hold_cycles', 5)
+        self.declare_parameter('robot5_goal_stage_max_v', 0.07)
+        self.declare_parameter('robot5_goal_stage_max_w', 0.10)
+        # Required distance between Robot 4's chassis and Robot 5's estimated
+        # chassis at the frozen shooting stage.
+        self.declare_parameter('robot5_robot4_stage_clearance', 0.62)
+        # If Robot 5 is already behind the puck and within this radial band,
+        # skip translation completely and begin live-goal alignment.
+        self.declare_parameter('robot5_local_stage_radial_tolerance', 0.06)
+        self.declare_parameter('robot5_local_stage_max_adjustment', 0.22)
+
         # Extra separation used only for Robot 4's rotational pass.
         # During the fast return swing, a small forward velocity closes
         # this additional gap so the stick reaches the puck.
@@ -235,7 +341,11 @@ class T4PassAndShoot(Node):
         )
 
         # Puck-reception detection.
-        self.declare_parameter('puck_receive_tolerance', 0.25)
+        self.declare_parameter('puck_receive_tolerance', 0.30)
+        # For the simulator, reception means Robot 5 is close to the correct
+        # shooting stage behind the stopped puck—not that the puck is close to
+        # the chassis center.
+        self.declare_parameter('robot5_receive_stage_tolerance', 0.08)
         self.declare_parameter('puck_receive_required_cycles', 5)
         self.declare_parameter('puck_motion_epsilon', 0.015)
 
@@ -259,7 +369,6 @@ class T4PassAndShoot(Node):
         self.robot5 = RobotState(robot_id=receiver_id)
 
         self.puck_topic = str(self.get_parameter('puck_topic').value)
-
         self.simulated_puck_topic = str(
             self.get_parameter('simulated_puck_topic').value
         )
@@ -275,9 +384,19 @@ class T4PassAndShoot(Node):
         self.puck_minimum_speed = float(
             self.get_parameter('puck_minimum_speed').value
         )
-
+        self.robot4_puck_velocity_transfer_gain = float(
+            self.get_parameter(
+                'robot4_puck_velocity_transfer_gain'
+            ).value
+        )
+        self.puck_simulation_dt = float(
+            self.get_parameter('puck_simulation_dt').value
+        )
         self.goal_x = float(self.get_parameter('goal_x').value)
         self.goal_y = float(self.get_parameter('goal_y').value)
+        self.goal_topic = str(
+            self.get_parameter('goal_topic').value
+        ).strip()
 
         self.receiver_backoff = float(
             self.get_parameter('receiver_backoff').value
@@ -287,6 +406,13 @@ class T4PassAndShoot(Node):
         )
         self.receiver_heading_offset = math.radians(
             float(self.get_parameter('receiver_heading_offset_deg').value)
+        )
+        self.robot5_initial_backup_distance = float(
+            self.get_parameter('robot5_initial_backup_distance').value
+        )
+
+        self.robot5_initial_backup_speed = float(
+            self.get_parameter('robot5_initial_backup_speed').value
         )
         self.receiver_departure_heading_tolerance = math.radians(
             float(
@@ -498,6 +624,189 @@ class T4PassAndShoot(Node):
                 'robot4_swing_timeout'
             ).value
         )
+
+        self.robot5_stick_angle_offset = math.radians(
+            float(
+                self.get_parameter(
+                    'robot5_stick_angle_offset_deg'
+                ).value
+            )
+        )
+        self.robot5_preload_angle = math.radians(
+            float(
+                self.get_parameter(
+                    'robot5_preload_angle_deg'
+                ).value
+            )
+        )
+        self.robot5_follow_through_angle = math.radians(
+            float(
+                self.get_parameter(
+                    'robot5_follow_through_angle_deg'
+                ).value
+            )
+        )
+        self.robot5_preload_w = float(
+            self.get_parameter('robot5_preload_w').value
+        )
+        self.robot5_strike_w = float(
+            self.get_parameter('robot5_strike_w').value
+        )
+        self.robot5_swing_forward_speed = float(
+            self.get_parameter(
+                'robot5_swing_forward_speed'
+            ).value
+        )
+        self.robot5_swing_timeout = float(
+            self.get_parameter('robot5_swing_timeout').value
+        )
+        self.robot5_manual_forward_distance = float(
+            self.get_parameter(
+                'robot5_manual_forward_distance'
+            ).value
+        )
+        self.robot5_manual_forward_speed = float(
+            self.get_parameter(
+                'robot5_manual_forward_speed'
+            ).value
+        )
+        self.robot5_manual_forward_timeout = float(
+            self.get_parameter(
+                'robot5_manual_forward_timeout'
+            ).value
+        )
+        self.robot5_forward_left_arc = math.radians(
+            float(
+                self.get_parameter(
+                    'robot5_forward_left_arc_deg'
+                ).value
+            )
+        )
+        self.robot5_forward_left_arc_distance = float(
+            self.get_parameter(
+                'robot5_forward_left_arc_distance'
+            ).value
+        )
+        self.robot5_forward_left_arc_kp = float(
+            self.get_parameter(
+                'robot5_forward_left_arc_kp'
+            ).value
+        )
+        self.robot5_forward_left_arc_max_w = float(
+            self.get_parameter(
+                'robot5_forward_left_arc_max_w'
+            ).value
+        )
+        self.robot5_manual_forward_completion_tolerance = float(
+            self.get_parameter(
+                'robot5_manual_forward_completion_tolerance'
+            ).value
+        )
+        self.robot5_manual_forward_heading_gain = float(
+            self.get_parameter(
+                'robot5_manual_forward_heading_gain'
+            ).value
+        )
+        self.robot5_manual_forward_max_w = float(
+            self.get_parameter(
+                'robot5_manual_forward_max_w'
+            ).value
+        )
+        self.robot5_tip_precontact_gap = float(
+            self.get_parameter('robot5_tip_precontact_gap').value
+        )
+        self.robot5_tip_lateral_tolerance = float(
+            self.get_parameter(
+                'robot5_tip_lateral_tolerance'
+            ).value
+        )
+        self.robot5_visible_tip_contact_compensation = float(
+            self.get_parameter(
+                'robot5_visible_tip_contact_compensation'
+            ).value
+        )
+        self.robot5_goal_line_body_shift = float(
+            self.get_parameter(
+                'robot5_goal_line_body_shift'
+            ).value
+        )
+        self.robot5_rendered_tip_compensation = float(
+            self.get_parameter(
+                'robot5_rendered_tip_compensation'
+            ).value
+        )
+        self.robot5_direct_contact_margin = float(
+            self.get_parameter(
+                'robot5_direct_contact_margin'
+            ).value
+        )
+        self.robot5_desired_chassis_puck_distance = float(
+            self.get_parameter(
+                'robot5_desired_chassis_puck_distance'
+            ).value
+        )
+        self.robot5_contact_stage_distance = float(
+            self.get_parameter('robot5_contact_stage_distance').value
+        )
+        self.robot5_contact_stage_tolerance = float(
+            self.get_parameter('robot5_contact_stage_tolerance').value
+        )
+        self.robot5_contact_stage_max_v = float(
+            self.get_parameter('robot5_contact_stage_max_v').value
+        )
+        self.robot5_contact_stage_max_w = float(
+            self.get_parameter('robot5_contact_stage_max_w').value
+        )
+        self.robot5_contact_target_tolerance = float(
+            self.get_parameter(
+                'robot5_contact_target_tolerance'
+            ).value
+        )
+        self.robot5_contact_approach_max_v = float(
+            self.get_parameter(
+                'robot5_contact_approach_max_v'
+            ).value
+        )
+        self.robot5_contact_approach_max_w = float(
+            self.get_parameter(
+                'robot5_contact_approach_max_w'
+            ).value
+        )
+        self.robot5_goal_stage_backoff = float(
+            self.get_parameter('robot5_goal_stage_backoff').value
+        )
+        self.robot5_goal_stage_left_offset = float(
+            self.get_parameter(
+                'robot5_goal_stage_left_offset'
+            ).value
+        )
+        self.robot5_goal_stage_tolerance = float(
+            self.get_parameter('robot5_goal_stage_tolerance').value
+        )
+        self.robot5_goal_stage_hold_cycles = int(
+            self.get_parameter('robot5_goal_stage_hold_cycles').value
+        )
+        self.robot5_goal_stage_max_v = float(
+            self.get_parameter('robot5_goal_stage_max_v').value
+        )
+        self.robot5_goal_stage_max_w = float(
+            self.get_parameter('robot5_goal_stage_max_w').value
+        )
+        self.robot5_robot4_stage_clearance = float(
+            self.get_parameter(
+                'robot5_robot4_stage_clearance'
+            ).value
+        )
+        self.robot5_local_stage_radial_tolerance = float(
+            self.get_parameter(
+                'robot5_local_stage_radial_tolerance'
+            ).value
+        )
+        self.robot5_local_stage_max_adjustment = float(
+            self.get_parameter(
+                'robot5_local_stage_max_adjustment'
+            ).value
+        )
         self.robot4_extra_stage_clearance = float(
             self.get_parameter(
                 'robot4_extra_stage_clearance'
@@ -519,6 +828,11 @@ class T4PassAndShoot(Node):
         self.puck_receive_tolerance = float(
             self.get_parameter('puck_receive_tolerance').value
         )
+        self.robot5_receive_stage_tolerance = float(
+            self.get_parameter(
+                'robot5_receive_stage_tolerance'
+            ).value
+        )
         self.puck_receive_required_cycles = int(
             self.get_parameter('puck_receive_required_cycles').value
         )
@@ -533,6 +847,13 @@ class T4PassAndShoot(Node):
         )
 
         positive_values = {
+            'pass_puck_speed': self.pass_puck_speed,
+            'shot_puck_speed': self.shot_puck_speed,
+            'puck_linear_drag': self.puck_linear_drag,
+            'puck_minimum_speed': self.puck_minimum_speed,
+            'robot4_puck_velocity_transfer_gain':
+                self.robot4_puck_velocity_transfer_gain,
+            'puck_simulation_dt': self.puck_simulation_dt,
             'point_offset': self.point_offset,
             'position_tolerance': self.position_tolerance,
             'max_v': self.max_v,
@@ -576,6 +897,8 @@ class T4PassAndShoot(Node):
             'robot4_departure_max_w':
                 self.robot4_departure_max_w,
             'puck_receive_tolerance': self.puck_receive_tolerance,
+            'robot5_receive_stage_tolerance':
+                self.robot5_receive_stage_tolerance,
         }
         for name, value in positive_values.items():
             if value <= 0.0:
@@ -667,6 +990,109 @@ class T4PassAndShoot(Node):
                 'Robot 4 total swing angle must be less '
                 'than 180 degrees.'
             )
+        robot5_positive_values = {
+            'robot5_preload_angle': self.robot5_preload_angle,
+            'robot5_follow_through_angle':
+                self.robot5_follow_through_angle,
+            'robot5_preload_w': self.robot5_preload_w,
+            'robot5_strike_w': self.robot5_strike_w,
+            'robot5_swing_timeout': self.robot5_swing_timeout,
+            'robot5_manual_forward_speed':
+                self.robot5_manual_forward_speed,
+            'robot5_manual_forward_timeout':
+                self.robot5_manual_forward_timeout,
+            'robot5_forward_left_arc':
+                self.robot5_forward_left_arc,
+            'robot5_forward_left_arc_distance':
+                self.robot5_forward_left_arc_distance,
+            'robot5_forward_left_arc_kp':
+                self.robot5_forward_left_arc_kp,
+            'robot5_forward_left_arc_max_w':
+                self.robot5_forward_left_arc_max_w,
+            'robot5_manual_forward_heading_gain':
+                self.robot5_manual_forward_heading_gain,
+            'robot5_manual_forward_max_w':
+                self.robot5_manual_forward_max_w,
+            'robot5_tip_precontact_gap':
+                self.robot5_tip_precontact_gap,
+            'robot5_tip_lateral_tolerance':
+                self.robot5_tip_lateral_tolerance,
+            'robot5_visible_tip_contact_compensation':
+                self.robot5_visible_tip_contact_compensation,
+            'robot5_goal_line_body_shift':
+                self.robot5_goal_line_body_shift,
+            'robot5_rendered_tip_compensation':
+                self.robot5_rendered_tip_compensation,
+            'robot5_direct_contact_margin':
+                self.robot5_direct_contact_margin,
+            'robot5_desired_chassis_puck_distance':
+                self.robot5_desired_chassis_puck_distance,
+            'robot5_contact_stage_distance':
+                self.robot5_contact_stage_distance,
+            'robot5_contact_stage_tolerance':
+                self.robot5_contact_stage_tolerance,
+            'robot5_contact_stage_max_v':
+                self.robot5_contact_stage_max_v,
+            'robot5_contact_stage_max_w':
+                self.robot5_contact_stage_max_w,
+            'robot5_contact_target_tolerance':
+                self.robot5_contact_target_tolerance,
+            'robot5_contact_approach_max_v':
+                self.robot5_contact_approach_max_v,
+            'robot5_contact_approach_max_w':
+                self.robot5_contact_approach_max_w,
+            'robot5_goal_stage_backoff':
+                self.robot5_goal_stage_backoff,
+            'robot5_goal_stage_tolerance':
+                self.robot5_goal_stage_tolerance,
+            'robot5_goal_stage_max_v':
+                self.robot5_goal_stage_max_v,
+            'robot5_goal_stage_max_w':
+                self.robot5_goal_stage_max_w,
+            'robot5_robot4_stage_clearance':
+                self.robot5_robot4_stage_clearance,
+            'robot5_local_stage_radial_tolerance':
+                self.robot5_local_stage_radial_tolerance,
+            'robot5_local_stage_max_adjustment':
+                self.robot5_local_stage_max_adjustment,
+        }
+        for name, value in robot5_positive_values.items():
+            if value <= 0.0:
+                raise ValueError(f'{name} must be positive.')
+
+        if self.robot5_manual_forward_distance < 0.0:
+            raise ValueError(
+                'robot5_manual_forward_distance cannot be negative.'
+            )
+        if not (
+            0.0
+            <= self.robot5_manual_forward_completion_tolerance
+            < self.robot5_manual_forward_distance
+        ):
+            raise ValueError(
+                'robot5_manual_forward_completion_tolerance must be '
+                'nonnegative and smaller than the forward distance.'
+            )
+
+        if self.robot5_goal_stage_hold_cycles < 1:
+            raise ValueError(
+                'robot5_goal_stage_hold_cycles must be at least 1.'
+            )
+
+        if self.robot5_swing_forward_speed < 0.0:
+            raise ValueError(
+                'robot5_swing_forward_speed cannot be negative.'
+            )
+
+        if (
+            self.robot5_preload_angle
+            + self.robot5_follow_through_angle
+            >= math.pi
+        ):
+            raise ValueError(
+                'Robot 5 total swing angle must be less than 180 degrees.'
+            )
+
         if self.puck_receive_required_cycles < 1:
             raise ValueError(
                 'puck_receive_required_cycles must be at least 1.'
@@ -703,10 +1129,14 @@ class T4PassAndShoot(Node):
         self.puck_z = 0.0
         self.puck_pose_received = False
         self.previous_puck_position: Optional[Tuple[float, float]] = None
+        self.goal_pose_received = False
 
         self.puck_vx = 0.0
         self.puck_vy = 0.0
         self.puck_simulation_active = False
+        # False only before the first simulated strike. Once True, the
+        # simulator remains the authoritative puck pose even after it stops.
+        self.simulated_puck_pose_owned = False
         self.last_puck_update_ns = self.get_clock().now().nanoseconds
 
         self.receive_x = 0.0
@@ -714,6 +1144,8 @@ class T4PassAndShoot(Node):
         self.receive_position_frozen = False
         self.receiver_departure_aligned = False
         self.robot4_departure_aligned = False
+        self.robot5_backup_start: Optional[Tuple[float, float]] = None
+        self.robot5_backup_complete = False
 
         # Freeze Robot 4's selected pass-stage point once Robot 5 has
         # reached its receiving pose. This prevents mocap noise from moving
@@ -754,6 +1186,50 @@ class T4PassAndShoot(Node):
         self.robot4_preload_start_heading: Optional[float] = None
         self.robot4_swing_start_heading: Optional[float] = None
         self.robot4_impact_heading: Optional[float] = None
+        self.robot4_simulated_impact_started = False
+        self.robot4_cached_puck_heading: Optional[float] = None
+        self.robot4_cached_puck_speed: Optional[float] = None
+
+        # Robot-5 explicit CCW-preload / CW-strike runtime values.
+        self.robot5_manual_forward_heading: Optional[float] = None
+        self.robot5_manual_forward_start: Optional[
+            Tuple[float, float]
+        ] = None
+        self.robot5_active_forward_distance = (
+            self.robot5_manual_forward_distance
+        )
+        self.robot5_manual_forward_puck_start: Optional[
+            Tuple[float, float]
+        ] = None
+        self.robot5_contact_target: Optional[
+            Tuple[float, float]
+        ] = None
+        self.robot5_contact_stage_target: Optional[
+            Tuple[float, float]
+        ] = None
+        self.robot5_tip_correction_target: Optional[
+            Tuple[float, float]
+        ] = None
+        self.robot5_tip_correction_active = False
+        self.robot5_contact_impact_heading: Optional[float] = None
+        self.robot5_contact_positioned = False
+        self.robot5_manual_forward_required_progress = 0.0
+
+        self.robot5_preload_start_heading: Optional[float] = None
+        self.robot5_strike_start_heading: Optional[float] = None
+        self.robot5_impact_heading: Optional[float] = None
+        self.robot5_puck_start: Optional[Tuple[float, float]] = None
+
+        # Frozen Robot-5 goal-stage geometry, captured after the puck stops.
+        self.robot5_goal_stage_target: Optional[
+            Tuple[float, float]
+        ] = None
+        self.robot5_goal_stage_heading: Optional[float] = None
+        self.robot5_goal_stage_goal: Optional[
+            Tuple[float, float]
+        ] = None
+        self.robot5_goal_stage_hold_counter = 0
+
         self.robot4_swing_total_angle = (
             self.robot4_backswing_angle
             + self.robot4_follow_through_angle
@@ -814,6 +1290,15 @@ class T4PassAndShoot(Node):
             self.best_effort_qos,
         )
 
+        self.goal_pose_sub = None
+        if self.goal_topic:
+            self.goal_pose_sub = self.create_subscription(
+                PoseStamped,
+                self.goal_topic,
+                self.goal_pose_callback,
+                self.best_effort_qos,
+            )
+
         # Other robots are statically known obstacle topics.
         for robot_id in range(1, 11):
             if robot_id in {
@@ -842,7 +1327,6 @@ class T4PassAndShoot(Node):
             self.discover_object_obstacle_topics,
         )
         self.control_timer = self.create_timer(0.05, self.control_loop)
-
         self.puck_simulation_timer = self.create_timer(
             0.02,
             self.update_simulated_puck,
@@ -857,7 +1341,18 @@ class T4PassAndShoot(Node):
             f'Green puck topic: {self.puck_topic}'
         )
         self.get_logger().info(
-            f'Goal: ({self.goal_x:.3f}, {self.goal_y:.3f})'
+            f'Fallback goal: ({self.goal_x:.3f}, {self.goal_y:.3f}); '
+            f'live goal topic: {self.goal_topic or "disabled"}'
+        )
+        self.get_logger().info(
+            'Simulator puck tuning: '
+            f'pass_speed={self.pass_puck_speed:.2f} m/s; '
+            f'shot_speed={self.shot_puck_speed:.2f} m/s; '
+            f'drag={self.puck_linear_drag:.2f} 1/s; '
+            f'dt={self.puck_simulation_dt:.3f} s; '
+            f'receive_tolerance={self.puck_receive_tolerance:.3f} m; '
+            f'receive_stage_tolerance='
+            f'{self.robot5_receive_stage_tolerance:.3f} m.'
         )
         self.get_logger().info(
             f'Pre-contact controlled-point distance: '
@@ -892,9 +1387,10 @@ class T4PassAndShoot(Node):
         robot.pose_received = True
 
     def puck_pose_callback(self, msg: PoseStamped) -> None:
-        # Stop accepting the original stationary VRPN pose after simulated
-        # puck movement begins.
-        if self.puck_simulation_active:
+        # VRPN supplies only the initial puck pose. After the first simulated
+        # strike, keep the integrated simulator pose authoritative even when
+        # the puck has slowed to rest.
+        if self.simulated_puck_pose_owned:
             return
 
         self.previous_puck_position = (
@@ -902,12 +1398,10 @@ class T4PassAndShoot(Node):
             if self.puck_pose_received
             else None
         )
-
         self.puck_x = msg.pose.position.x
         self.puck_y = msg.pose.position.y
         self.puck_z = msg.pose.position.z
         self.puck_pose_received = True
-
 
     def start_puck_motion(
         self,
@@ -917,6 +1411,7 @@ class T4PassAndShoot(Node):
         self.puck_vx = speed * math.cos(heading)
         self.puck_vy = speed * math.sin(heading)
         self.puck_simulation_active = True
+        self.simulated_puck_pose_owned = True
         self.last_puck_update_ns = self.get_clock().now().nanoseconds
 
 
@@ -925,10 +1420,9 @@ class T4PassAndShoot(Node):
             return
 
         now_ns = self.get_clock().now().nanoseconds
-        dt = max(
-            (now_ns - self.last_puck_update_ns) / 1e9,
-            0.0,
-        )
+        # Use a fixed numerical step for deterministic puck travel.
+        # The timer itself also runs at 0.02 s.
+        dt = self.puck_simulation_dt
         self.last_puck_update_ns = now_ns
 
         self.previous_puck_position = (
@@ -960,6 +1454,12 @@ class T4PassAndShoot(Node):
         pose.pose.orientation.w = 1.0
 
         self.simulated_puck_pose_pub.publish(pose)
+
+    def goal_pose_callback(self, msg: PoseStamped) -> None:
+        """Update the goal from its live VRPN rigid-body pose."""
+        self.goal_x = msg.pose.position.x
+        self.goal_y = msg.pose.position.y
+        self.goal_pose_received = True
 
     def obstacle_pose_callback(
         self,
@@ -1091,6 +1591,162 @@ class T4PassAndShoot(Node):
 
         return self.robot5.x, self.robot5.y
 
+    def robot5_desired_received_puck_position(
+        self,
+    ) -> Tuple[float, float]:
+        """
+        Return the puck position that makes Robot 5's current controlled point
+        equal to the normal goal-shot staging point.
+
+        Therefore, after reception Robot 5 should need mainly alignment and
+        rotational striking, not a large circular translation.
+        """
+        r5_px, r5_py = self.controlled_point(self.robot5)
+        goal_heading = self.heading_between(
+            r5_px,
+            r5_py,
+            self.goal_x,
+            self.goal_y,
+        )
+        return (
+            r5_px
+            + self.precontact_distance * math.cos(goal_heading),
+            r5_py
+            + self.precontact_distance * math.sin(goal_heading),
+        )
+
+    def calculated_pass_launch_speed(
+        self,
+        target_x: float,
+        target_y: float,
+    ) -> float:
+        """
+        Choose a low launch speed that stops near the target under the existing
+        exponential drag model. For dv/dt=-k v, travel before the speed reaches
+        v_min is approximately (v0-v_min)/k.
+        """
+        travel_distance = math.hypot(
+            target_x - self.puck_x,
+            target_y - self.puck_y,
+        )
+        required_speed = (
+            self.puck_minimum_speed
+            + self.puck_linear_drag * travel_distance
+        )
+        return clamp(
+            required_speed,
+            self.puck_minimum_speed,
+            self.pass_puck_speed,
+        )
+
+    def calculate_robot5_behind_left_goal_stage(
+        self,
+    ) -> Tuple[float, float, float]:
+        """
+        Calculate the nearest local shooting-stage target.
+
+        Robot 5 remains on its current side of the puck. The target changes
+        only the controlled-point radius from the puck; it does not send the
+        robot around the puck to a distant behind-left point.
+        """
+        goal_heading = self.heading_between(
+            self.puck_x,
+            self.puck_y,
+            self.goal_x,
+            self.goal_y,
+        )
+        goal_dx = math.cos(goal_heading)
+        goal_dy = math.sin(goal_heading)
+
+        current_cp_x, current_cp_y = self.controlled_point(self.robot5)
+        from_puck_x = current_cp_x - self.puck_x
+        from_puck_y = current_cp_y - self.puck_y
+        current_radius = math.hypot(from_puck_x, from_puck_y)
+
+        # Robot 5 should be behind the puck relative to the live goal.
+        behind_projection = (
+            from_puck_x * goal_dx
+            + from_puck_y * goal_dy
+        )
+
+        desired_radius = max(
+            self.precontact_distance,
+            self.target_puck_safe_distance + 0.025,
+        )
+
+        if current_radius < 1e-6:
+            radial_x = -goal_dx
+            radial_y = -goal_dy
+        else:
+            radial_x = from_puck_x / current_radius
+            radial_y = from_puck_y / current_radius
+
+        # When Robot 5 is already on the correct side, preserve that side.
+        # A fallback behind-goal direction is used only if it is clearly in
+        # front of the puck.
+        if behind_projection >= 0.05:
+            radial_x = -goal_dx
+            radial_y = -goal_dy
+
+        requested_adjustment = desired_radius - current_radius
+        limited_adjustment = clamp(
+            requested_adjustment,
+            -self.robot5_local_stage_max_adjustment,
+            self.robot5_local_stage_max_adjustment,
+        )
+        target_radius = max(
+            current_radius + limited_adjustment,
+            self.target_puck_safe_distance + 0.025,
+        )
+
+        stage_x = self.puck_x + target_radius * radial_x
+        stage_y = self.puck_y + target_radius * radial_y
+
+        return stage_x, stage_y, goal_heading
+
+    def freeze_robot5_goal_stage(self) -> None:
+        """Capture the live goal and freeze Robot 5's behind-left target."""
+        stage_x, stage_y, goal_heading = (
+            self.calculate_robot5_behind_left_goal_stage()
+        )
+        self.robot5_goal_stage_target = (stage_x, stage_y)
+        self.robot5_goal_stage_heading = goal_heading
+        self.robot5_goal_stage_goal = (
+            self.goal_x,
+            self.goal_y,
+        )
+        self.robot5_goal_stage_hold_counter = 0
+
+        estimated_r5_chassis_x = (
+            stage_x - self.point_offset * math.cos(goal_heading)
+        )
+        estimated_r5_chassis_y = (
+            stage_y - self.point_offset * math.sin(goal_heading)
+        )
+        estimated_robot4_clearance = math.hypot(
+            estimated_r5_chassis_x - self.robot4.x,
+            estimated_r5_chassis_y - self.robot4.y,
+        )
+
+        current_cp_x, current_cp_y = self.controlled_point(
+            self.robot5
+        )
+        local_adjustment = math.hypot(
+            stage_x - current_cp_x,
+            stage_y - current_cp_y,
+        )
+
+        self.get_logger().warning(
+            'Robot 5 LOCAL goal stage frozen from LIVE goal: '
+            f'goal=({self.goal_x:.3f},{self.goal_y:.3f}); '
+            f'puck=({self.puck_x:.3f},{self.puck_y:.3f}); '
+            f'current_cp=({current_cp_x:.3f},{current_cp_y:.3f}); '
+            f'local_target=({stage_x:.3f},{stage_y:.3f}); '
+            f'required_adjustment={local_adjustment:.3f} m; '
+            f'estimated_R4_R5_clearance='
+            f'{estimated_robot4_clearance:.3f} m.'
+        )
+
     def stage_point_behind_puck(
         self,
         target_x: float,
@@ -1118,6 +1774,7 @@ class T4PassAndShoot(Node):
     def target_puck_contact_enabled(self) -> bool:
         return self.state in {
             self.PASS_WITH_R4,
+            self.BACKSWING_R5,
             self.SHOOT_WITH_R5,
         }
         
@@ -1237,14 +1894,38 @@ class T4PassAndShoot(Node):
             target_puck_safe_distance = (
                 self.robot4_stage_puck_safe_distance
             )
-        
-            consider(
-                self.puck_x,
-                self.puck_y,
-                target_puck_safe_distance,
-                'target_green_puck',
-                emergency_threshold=0.0,
-            )
+
+        if controlled_robot.robot_id == self.robot5.robot_id:
+            if self.state == self.MOVE_R5_TO_GOAL_STAGE:
+                if self.robot5_tip_correction_active:
+                    # Final adaptive translation: explicit tip geometry defines
+                    # the target, so preserve chassis clearance only.
+                    consider(
+                        self.puck_x,
+                        self.puck_y,
+                        self.own_robot_radius + self.puck_radius + 0.03,
+                        'target_green_puck',
+                        emergency_threshold=0.0,
+                    )
+                else:
+                    # Coarse travel to the safe compensated stage.
+                    consider(
+                        self.puck_x,
+                        self.puck_y,
+                        self.target_puck_safe_distance,
+                        'target_green_puck',
+                        emergency_threshold=0.0,
+                    )
+            elif self.state == self.MANUAL_FORWARD_R5:
+                # Final deliberate approach: preserve chassis clearance while
+                # explicit stick-tip geometry controls the stopping point.
+                consider(
+                    self.puck_x,
+                    self.puck_y,
+                    self.own_robot_radius + self.puck_radius + 0.03,
+                    'target_green_puck',
+                    emergency_threshold=0.0,
+                )
 
         return active, emergency_stop
 
@@ -2385,11 +3066,104 @@ class T4PassAndShoot(Node):
             self.robot4.theta + self.robot4_backswing_angle
         )
 
+    def robot4_stick_tip_impact_velocity(
+        self,
+    ) -> Tuple[float, float, float]:
+        """
+        Calculate Robot 4's world-frame stick-tip velocity from the same
+        rigid-body kinematics used by the controller.
+
+        [v_tip_x, v_tip_y]^T = J_tip(q) [v, omega]^T
+        """
+        commanded_v = self.robot4_swing_forward_speed
+        commanded_omega = (
+            self.robot4_swing_direction
+            * self.robot4_swing_max_w
+        )
+
+        tip_velocity = (
+            self.robot4_stick_tip_jacobian()
+            @ np.array(
+                [commanded_v, commanded_omega],
+                dtype=float,
+            )
+        )
+        tip_vx = float(tip_velocity[0])
+        tip_vy = float(tip_velocity[1])
+        tip_speed = math.hypot(tip_vx, tip_vy)
+        return tip_vx, tip_vy, tip_speed
+
+    def cache_robot4_impact_puck_motion(self) -> None:
+        """
+        Capture the stick-tip velocity at the nominal impact angle without
+        moving the puck yet. Delaying the simulator launch preserves the
+        proven visible stick-to-puck contact from the previous controller.
+        """
+        if self.robot4_cached_puck_heading is not None:
+            return
+
+        tip_vx, tip_vy, tip_speed = (
+            self.robot4_stick_tip_impact_velocity()
+        )
+        if tip_speed <= 1e-9:
+            raise RuntimeError(
+                'Robot 4 stick-tip impact speed is zero.'
+            )
+
+        impact_heading = math.atan2(tip_vy, tip_vx)
+        launch_speed = clamp(
+            self.robot4_puck_velocity_transfer_gain * tip_speed,
+            self.puck_minimum_speed,
+            self.pass_puck_speed,
+        )
+        self.robot4_cached_puck_heading = impact_heading
+        self.robot4_cached_puck_speed = launch_speed
+
+        receiver_x, receiver_y = self.live_receiver_position()
+        desired_heading = self.heading_between(
+            self.puck_x,
+            self.puck_y,
+            receiver_x,
+            receiver_y,
+        )
+        heading_difference = math.degrees(
+            wrap_angle(impact_heading - desired_heading)
+        )
+
+        self.get_logger().warning(
+            'Robot 4 impact velocity CACHED; puck remains stationary until '
+            'the physical follow-through completes: '
+            f'tip_velocity=({tip_vx:.3f},{tip_vy:.3f}) m/s; '
+            f'launch_speed={launch_speed:.3f} m/s; '
+            f'impact_heading={math.degrees(impact_heading):.1f} deg; '
+            f'heading_to_R5={math.degrees(desired_heading):.1f} deg; '
+            f'difference={heading_difference:.1f} deg.'
+        )
+
+    def start_robot4_impact_puck_motion(self) -> None:
+        """Launch after follow-through using the cached physical direction."""
+        if self.robot4_simulated_impact_started:
+            return
+        if (
+            self.robot4_cached_puck_heading is None
+            or self.robot4_cached_puck_speed is None
+        ):
+            self.cache_robot4_impact_puck_motion()
+
+        self.start_puck_motion(
+            self.robot4_cached_puck_heading,
+            self.robot4_cached_puck_speed,
+        )
+        self.robot4_simulated_impact_started = True
+
     def begin_robot4_rotational_pass(self) -> None:
         """Initialize a guaranteed full-speed clockwise strike."""
         self.robot4_swing_direction = -1  # Negative angular.z is clockwise.
         self.robot4_swing_start_heading = self.robot4.theta
         self.robot4_impact_heading = self.robot4_pass_impact_heading()
+        self.robot4_simulated_impact_started = False
+        self.robot4_cached_puck_heading = None
+        self.robot4_cached_puck_speed = None
         self.robot4_swing_total_angle = (
             self.robot4_backswing_angle
             + self.robot4_follow_through_angle
@@ -2510,6 +3284,486 @@ class T4PassAndShoot(Node):
         self.contact_target_point = None
         self.get_logger().info(f'T4 state -> {new_state}')
 
+    def robot5_goal_heading(self) -> float:
+        """Return the current green-puck-to-goal direction."""
+        return self.heading_between(
+            self.puck_x,
+            self.puck_y,
+            self.goal_x,
+            self.goal_y,
+        )
+
+    def robot5_stick_tip_position(self) -> Tuple[float, float]:
+        """Return Robot 5's physical stick-tip world position."""
+        theta = self.robot5.theta
+        stick_heading = theta + self.robot5_stick_angle_offset
+        return (
+            self.robot5.x
+            + self.point_offset * math.cos(theta)
+            + self.stick_tip_offset_from_point * math.cos(stick_heading),
+            self.robot5.y
+            + self.point_offset * math.sin(theta)
+            + self.stick_tip_offset_from_point * math.sin(stick_heading),
+        )
+
+    def robot5_impact_body_heading(self) -> float:
+        """Return the live puck-to-goal shot-line heading."""
+        return self.robot5_goal_heading()
+
+    def calculate_robot5_exact_contact_target(
+        self,
+    ) -> Tuple[float, float, float]:
+        """
+        Copy Robot 4's successful compensated-stage calculation.
+
+        The desired stick-tip location is just behind the puck on the live
+        puck-to-goal line. Because the stick is mounted at an angle, subtract
+        the mounted-stick vector from that desired tip point to obtain the
+        controlled-point staging target.
+        """
+        shot_heading = self.robot5_goal_heading()
+        shot_ux = math.cos(shot_heading)
+        shot_uy = math.sin(shot_heading)
+
+        tip_gap = self.puck_radius + self.robot5_tip_precontact_gap
+        desired_tip_x = self.puck_x - tip_gap * shot_ux
+        desired_tip_y = self.puck_y - tip_gap * shot_uy
+
+        stick_heading = (
+            shot_heading + self.robot5_stick_angle_offset
+        )
+        stage_x = (
+            desired_tip_x
+            - self.stick_tip_offset_from_point
+            * math.cos(stick_heading)
+        )
+        stage_y = (
+            desired_tip_y
+            - self.stick_tip_offset_from_point
+            * math.sin(stick_heading)
+        )
+
+        # Move Robot 5's body/controlled-point target slightly toward the live
+        # goal while preserving the same orientation and stick geometry.
+        stage_x += self.robot5_goal_line_body_shift * shot_ux
+        stage_y += self.robot5_goal_line_body_shift * shot_uy
+
+        return stage_x, stage_y, shot_heading
+
+    def freeze_robot5_contact_geometry(self) -> None:
+        """
+        Freeze one Robot-4-style compensated staging point.
+
+        There is no second contact target and no tangent-heading calculation.
+        Robot 5 reaches this point, freezes its current heading, performs one
+        short measured forward nudge, and shoots.
+        """
+        stage_x, stage_y, shot_heading = (
+            self.calculate_robot5_exact_contact_target()
+        )
+
+        self.robot5_contact_stage_target = (stage_x, stage_y)
+        self.robot5_tip_correction_target = None
+        self.robot5_tip_correction_active = False
+        self.robot5_contact_target = None
+        self.robot5_contact_impact_heading = shot_heading
+        self.robot5_contact_positioned = False
+
+        desired_tip_x = (
+            self.puck_x
+            - (self.puck_radius + self.robot5_tip_precontact_gap)
+            * math.cos(shot_heading)
+        )
+        desired_tip_y = (
+            self.puck_y
+            - (self.puck_radius + self.robot5_tip_precontact_gap)
+            * math.sin(shot_heading)
+        )
+
+        self.get_logger().warning(
+            'Robot 5 TRUE Robot-4-style stage frozen: '
+            f'puck=({self.puck_x:.3f},{self.puck_y:.3f}); '
+            f'goal=({self.goal_x:.3f},{self.goal_y:.3f}); '
+            f'controlled_point=({stage_x:.3f},{stage_y:.3f}); '
+            f'desired_tip=({desired_tip_x:.3f},{desired_tip_y:.3f}); '
+            f'body_shift_toward_goal='
+            f'{self.robot5_goal_line_body_shift:.3f} m; '
+            f'shot_heading={math.degrees(shot_heading):.1f} deg.'
+        )
+
+    def calculate_robot5_adaptive_tip_correction(
+        self,
+    ) -> Tuple[float, float, float, float]:
+        """
+        Compute a translation-only correction from the ACTUAL current tip pose.
+
+        The desired tip is behind the puck on the live goal line. The current
+        controlled-point target is shifted by exactly the same world-frame
+        vector needed to move the current stick tip to that desired point.
+        This removes the error caused by an arbitrary arrival heading.
+        """
+        goal_heading = self.robot5_goal_heading()
+        gx = math.cos(goal_heading)
+        gy = math.sin(goal_heading)
+
+        desired_tip_offset = (
+            self.robot5_rendered_tip_compensation
+            - self.robot5_tip_precontact_gap
+        )
+        desired_tip_x = self.puck_x + desired_tip_offset * gx
+        desired_tip_y = self.puck_y + desired_tip_offset * gy
+
+        current_tip_x, current_tip_y = self.robot5_stick_tip_position()
+        correction_x = desired_tip_x - current_tip_x
+        correction_y = desired_tip_y - current_tip_y
+
+        cp_x, cp_y = self.controlled_point(self.robot5)
+        target_cp_x = cp_x + correction_x
+        target_cp_y = cp_y + correction_y
+
+        correction_distance = math.hypot(correction_x, correction_y)
+        return (
+            target_cp_x,
+            target_cp_y,
+            correction_distance,
+            goal_heading,
+        )
+
+    def begin_robot5_manual_forward(self) -> None:
+        """
+        Begin a direct straight approach with no navigation/orbit.
+
+        The required distance is calculated from the current measured stick-tip
+        pose. Robot 5 then moves only forward along its current heading.
+        """
+        self.robot5_manual_forward_heading = self.robot5.theta
+        self.robot5_manual_forward_start = (
+            self.robot5.x,
+            self.robot5.y,
+        )
+        self.robot5_manual_forward_puck_start = (
+            self.puck_x,
+            self.puck_y,
+        )
+
+        heading = self.robot5_manual_forward_heading
+        forward_x = math.cos(heading)
+        forward_y = math.sin(heading)
+
+        goal_heading = self.robot5_goal_heading()
+        goal_x = math.cos(goal_heading)
+        goal_y = math.sin(goal_heading)
+
+        # Desired rendered tip point: immediately behind the puck along the
+        # live puck-to-goal line.
+        desired_tip_gap = 0.010
+        desired_tip_x = self.puck_x - desired_tip_gap * goal_x
+        desired_tip_y = self.puck_y - desired_tip_gap * goal_y
+
+        current_tip_x, current_tip_y = self.robot5_stick_tip_position()
+        tip_error_x = desired_tip_x - current_tip_x
+        tip_error_y = desired_tip_y - current_tip_y
+
+        # A forward chassis translation moves the stick tip by the same vector.
+        required_forward = (
+            tip_error_x * forward_x
+            + tip_error_y * forward_y
+        )
+
+        # The geometric tip model underestimates the required travel because
+        # the rendered stick is physically shorter. Also calculate the travel
+        # required from the measured chassis-to-puck distance.
+        chassis_puck_distance = math.hypot(
+            self.puck_x - self.robot5.x,
+            self.puck_y - self.robot5.y,
+        )
+        body_based_forward = max(
+            0.0,
+            chassis_puck_distance
+            - self.robot5_desired_chassis_puck_distance,
+        )
+        model_based_forward = max(
+            0.0,
+            required_forward + self.robot5_direct_contact_margin,
+        )
+
+        self.robot5_active_forward_distance = clamp(
+            max(model_based_forward, body_based_forward),
+            0.0,
+            0.50,
+        )
+
+        lateral_error = abs(
+            -tip_error_x * forward_y
+            + tip_error_y * forward_x
+        )
+
+        self.state_start_ns = self.get_clock().now().nanoseconds
+
+        self.get_logger().warning(
+            'Robot 5 DIRECT forward approach initialized: '
+            f'calculated_distance='
+            f'{self.robot5_active_forward_distance:.3f} m; '
+            f'contact_margin='
+            f'{self.robot5_direct_contact_margin:.3f} m; '
+            f'model_based_distance={model_based_forward:.3f} m; '
+            f'body_based_distance={body_based_forward:.3f} m; '
+            f'initial_chassis_puck_distance='
+            f'{chassis_puck_distance:.3f} m; '
+            f'desired_chassis_puck_distance='
+            f'{self.robot5_desired_chassis_puck_distance:.3f} m; '
+            f'current_tip=({current_tip_x:.3f},{current_tip_y:.3f}); '
+            f'desired_tip=({desired_tip_x:.3f},{desired_tip_y:.3f}); '
+            f'lateral_error={lateral_error:.3f} m; '
+            f'frozen_heading={math.degrees(heading):.1f} deg; '
+            f'bounded_left_arc='
+            f'{math.degrees(self.robot5_forward_left_arc):.1f} deg over '
+            f'{self.robot5_forward_left_arc_distance:.3f} m; '
+            'MOVE_R5_TO_GOAL_STAGE is bypassed.'
+        )
+
+    def execute_robot5_manual_forward(
+        self,
+    ) -> Tuple[bool, float, float]:
+        """Move the same short measured distance used by Robot 4."""
+        if (
+            self.robot5_manual_forward_heading is None
+            or self.robot5_manual_forward_start is None
+            or self.robot5_manual_forward_puck_start is None
+        ):
+            raise RuntimeError(
+                'Robot 5 Robot-4-style nudge is not initialized.'
+            )
+
+        heading = self.robot5_manual_forward_heading
+        shot_ux = math.cos(heading)
+        shot_uy = math.sin(heading)
+        heading_error = wrap_angle(heading - self.robot5.theta)
+
+        progress = max(
+            0.0,
+            (self.robot5.x - self.robot5_manual_forward_start[0])
+            * shot_ux
+            + (self.robot5.y - self.robot5_manual_forward_start[1])
+            * shot_uy,
+        )
+        remaining = max(
+            0.0,
+            self.robot5_active_forward_distance - progress,
+        )
+
+        puck_motion = math.hypot(
+            self.puck_x - self.robot5_manual_forward_puck_start[0],
+            self.puck_y - self.robot5_manual_forward_puck_start[1],
+        )
+        elapsed = (
+            self.get_clock().now().nanoseconds - self.state_start_ns
+        ) / 1e9
+
+        distance_completed = (
+            remaining
+            <= self.robot5_manual_forward_completion_tolerance
+        )
+        puck_touched = (
+            puck_motion >= 0.5 * self.puck_motion_epsilon
+        )
+        nominal_translation_time = (
+            self.robot5_active_forward_distance
+            / max(self.robot5_manual_forward_speed, 1e-6)
+        )
+        effective_timeout = max(
+            self.robot5_manual_forward_timeout,
+            1.6 * nominal_translation_time + 1.5,
+        )
+        timed_out = elapsed >= effective_timeout
+        finished = distance_completed or puck_touched or timed_out
+
+        if finished:
+            self.publish_stop(self.robot5)
+            self.get_logger().warning(
+                'Robot 5 Robot-4-style forward nudge complete: '
+                f'progress={progress:.3f} m; '
+                f'remaining={remaining:.3f} m; '
+                f'puck_motion={puck_motion:.3f} m; '
+                f'elapsed={elapsed:.2f}/'
+                f'{effective_timeout:.2f} s; '
+                f'timed_out={timed_out}.'
+            )
+            return True, progress, puck_motion
+
+        distance_scale = 1.0
+        if remaining < 0.020:
+            distance_scale = max(0.30, remaining / 0.020)
+
+        cmd = Twist()
+        cmd.linear.x = (
+            self.robot5_manual_forward_speed * distance_scale
+        )
+
+        arc_fraction = clamp(
+            progress / max(
+                self.robot5_forward_left_arc_distance,
+                1e-6,
+            ),
+            0.0,
+            1.0,
+        )
+        desired_arc_heading = wrap_angle(
+            self.robot5_manual_forward_heading
+            + arc_fraction * self.robot5_forward_left_arc
+        )
+        arc_heading_error = wrap_angle(
+            desired_arc_heading - self.robot5.theta
+        )
+
+        # Positive angular.z only: a small counterclockwise/left arc.
+        # Once the bounded target angle is reached, the command becomes zero.
+        cmd.angular.z = clamp(
+            self.robot5_forward_left_arc_kp
+            * max(0.0, arc_heading_error),
+            0.0,
+            self.robot5_forward_left_arc_max_w,
+        )
+        self.robot5_cmd_pub.publish(cmd)
+
+        return False, progress, puck_motion
+
+    def begin_robot5_ccw_preload(self) -> None:
+        """Begin the guaranteed counterclockwise preload."""
+        self.robot5_preload_start_heading = self.robot5.theta
+        self.state_start_ns = self.get_clock().now().nanoseconds
+        self.get_logger().warning(
+            'Robot 5 DIRECT SHOT from receive pose: '
+            f'robot=({self.robot5.x:.3f},{self.robot5.y:.3f}); '
+            f'puck=({self.puck_x:.3f},{self.puck_y:.3f}); '
+            f'live_goal=({self.goal_x:.3f},{self.goal_y:.3f}); '
+            f'CCW preload='
+            f'{math.degrees(self.robot5_preload_angle):.1f} deg at '
+            f'+{self.robot5_preload_w:.2f} rad/s; '
+            'no navigation stage; no heading-alignment stage.'
+        )
+
+    def execute_robot5_ccw_preload(self) -> Tuple[bool, float]:
+        """Rotate Robot 5 counterclockwise by the full preload angle."""
+        if self.robot5_preload_start_heading is None:
+            raise RuntimeError('Robot 5 preload was not initialized.')
+
+        progress = max(
+            0.0,
+            wrap_angle(
+                self.robot5.theta
+                - self.robot5_preload_start_heading
+            ),
+        )
+
+        elapsed = (
+            self.get_clock().now().nanoseconds - self.state_start_ns
+        ) / 1e9
+        timeout = max(
+            2.0,
+            2.0 * self.robot5_preload_angle
+            / max(self.robot5_preload_w, 1e-6),
+        )
+
+        finished = (
+            progress >= self.robot5_preload_angle
+            or elapsed >= timeout
+        )
+
+        if finished:
+            self.publish_stop(self.robot5)
+            self.get_logger().warning(
+                'Robot 5 PRELOAD COMPLETE: '
+                f'CCW progress={math.degrees(progress):.1f} deg. '
+                'Starting full-speed clockwise goal strike.'
+            )
+            return True, progress
+
+        cmd = Twist()
+        cmd.linear.x = 0.0
+        cmd.angular.z = abs(self.robot5_preload_w)
+        self.robot5_cmd_pub.publish(cmd)
+        return False, progress
+
+    def begin_robot5_goal_strike(self) -> None:
+        """Initialize a full-speed clockwise strike toward the goal."""
+        self.robot5_strike_start_heading = self.robot5.theta
+        self.robot5_impact_heading = self.robot5_impact_body_heading()
+        self.robot5_puck_start = (self.puck_x, self.puck_y)
+        self.state_start_ns = self.get_clock().now().nanoseconds
+
+        self.get_logger().warning(
+            'Robot 5 CW GOAL STRIKE START: '
+            f'goal=({self.goal_x:.3f},{self.goal_y:.3f}); '
+            f'puck=({self.puck_x:.3f},{self.puck_y:.3f}); '
+            f'impact_body_heading='
+            f'{math.degrees(self.robot5_impact_heading):.1f} deg; '
+            f'commanded_omega=-{self.robot5_strike_w:.2f} rad/s.'
+        )
+
+    def execute_robot5_goal_strike(
+        self,
+    ) -> Tuple[bool, float, float]:
+        """Strike clockwise at full speed from the first command cycle."""
+        if (
+            self.robot5_strike_start_heading is None
+            or self.robot5_puck_start is None
+        ):
+            raise RuntimeError('Robot 5 goal strike was not initialized.')
+
+        clockwise_progress = max(
+            0.0,
+            wrap_angle(
+                self.robot5_strike_start_heading
+                - self.robot5.theta
+            ),
+        )
+        total_angle = (
+            self.robot5_preload_angle
+            + self.robot5_follow_through_angle
+        )
+
+        cmd = Twist()
+        cmd.linear.x = self.robot5_swing_forward_speed
+        cmd.angular.z = -abs(self.robot5_strike_w)
+        self.robot5_cmd_pub.publish(cmd)
+
+        goal_heading = self.robot5_goal_heading()
+        goal_ux = math.cos(goal_heading)
+        goal_uy = math.sin(goal_heading)
+        puck_goal_progress = (
+            (self.puck_x - self.robot5_puck_start[0]) * goal_ux
+            + (self.puck_y - self.robot5_puck_start[1]) * goal_uy
+        )
+        puck_was_shot = (
+            puck_goal_progress >= self.puck_motion_epsilon
+        )
+
+        elapsed = (
+            self.get_clock().now().nanoseconds - self.state_start_ns
+        ) / 1e9
+        finished = (
+            clockwise_progress >= total_angle
+            or puck_was_shot
+            or elapsed >= self.robot5_swing_timeout
+        )
+
+        if finished:
+            self.publish_stop(self.robot5)
+            if puck_was_shot:
+                self.get_logger().warning(
+                    'Robot 5 GOAL SHOT detected: '
+                    f'puck_goal_progress={puck_goal_progress:.3f} m.'
+                )
+            elif elapsed >= self.robot5_swing_timeout:
+                self.get_logger().warning(
+                    'Robot 5 goal strike timeout: '
+                    f'CW progress='
+                    f'{math.degrees(clockwise_progress):.1f} deg.'
+                )
+
+        return finished, clockwise_progress, puck_goal_progress
+
     def control_loop(self) -> None:
         if self.state == self.COMPLETE:
             self.stop_both()
@@ -2555,6 +3809,30 @@ class T4PassAndShoot(Node):
 
         if self.state == self.MOVE_R5_TO_RECEIVE:
             self.publish_stop(self.robot4)
+
+            # First back Robot 5 away from the rigid body.
+            if not self.robot5_backup_complete:
+
+                if self.robot5_backup_start is None:
+                    self.robot5_backup_start = (
+                        self.robot5.x,
+                        self.robot5.y,
+                    )
+
+                backup_distance = math.hypot(
+                    self.robot5.x - self.robot5_backup_start[0],
+                    self.robot5.y - self.robot5_backup_start[1],
+                )
+
+                if backup_distance < self.robot5_initial_backup_distance:
+                    cmd = Twist()
+                    cmd.linear.x = -self.robot5_initial_backup_speed
+                    cmd.angular.z = 0.0
+                    self.robot5_cmd_pub.publish(cmd)
+                    return
+
+                self.publish_stop(self.robot5)
+                self.robot5_backup_complete = True
 
             if not self.receiver_departure_aligned:
                 departure_heading = self.heading_between(
@@ -2814,6 +4092,12 @@ class T4PassAndShoot(Node):
             ) = self.execute_robot4_rotational_pass()
 
             if (
+                self.robot4_cached_puck_heading is None
+                and angular_progress >= self.robot4_backswing_angle
+            ):
+                self.cache_robot4_impact_puck_motion()
+
+            if (
                 self.get_clock().now().nanoseconds
                 - self.last_debug_log_ns
                 >= int(0.25e9)
@@ -2831,21 +4115,11 @@ class T4PassAndShoot(Node):
                     self.get_clock().now().nanoseconds
                 )
 
-
             if finished:
-                receiver_x, receiver_y = self.live_receiver_position()
-
-                pass_heading = self.heading_between(
-                    self.puck_x,
-                    self.puck_y,
-                    receiver_x,
-                    receiver_y,
-                )
-
-                self.start_puck_motion(
-                    pass_heading,
-                    self.pass_puck_speed,
-                )
+                # Preserve the proven Robot 4 contact sequence: only now,
+                # after physical follow-through, release the simulated puck.
+                if not self.robot4_simulated_impact_started:
+                    self.start_robot4_impact_puck_motion()
 
                 self.puck_receive_counter = 0
                 self.transition_to(self.WAIT_FOR_PUCK_AT_R5)
@@ -2854,9 +4128,23 @@ class T4PassAndShoot(Node):
         if self.state == self.WAIT_FOR_PUCK_AT_R5:
             self.stop_both()
 
-            receiver_x, receiver_y = self.live_receiver_position()
+            # Determine whether Robot 5 is already near the correct shooting
+            # stage behind the stopped puck, using the current live goal.
+            stage_x, stage_y, _ = self.stage_point_behind_puck(
+                self.goal_x,
+                self.goal_y,
+            )
+            robot5_cp_x, robot5_cp_y = self.controlled_point(
+                self.robot5
+            )
+            receive_stage_error = math.hypot(
+                stage_x - robot5_cp_x,
+                stage_y - robot5_cp_y,
+            )
 
-            receive_error = math.hypot(
+            # Keep chassis distance only as a diagnostic; it is not the gate.
+            receiver_x, receiver_y = self.live_receiver_position()
+            puck_to_chassis_distance = math.hypot(
                 self.puck_x - receiver_x,
                 self.puck_y - receiver_y,
             )
@@ -2868,62 +4156,274 @@ class T4PassAndShoot(Node):
                     self.puck_y - self.previous_puck_position[1],
                 )
 
-            if (
-                receive_error <= self.puck_receive_tolerance
-                and puck_motion <= self.puck_motion_epsilon
-            ):
+            # For a simulated pass, reception is complete when the simulator
+            # has finished propagating the puck. Do not gate this transition on
+            # chassis distance or stage geometry; MOVE_R5_TO_GOAL_STAGE is the
+            # state responsible for correcting Robot 5's position afterward.
+            puck_has_stopped = (
+                self.simulated_puck_pose_owned
+                and not self.puck_simulation_active
+            )
+
+            if puck_has_stopped:
                 self.puck_receive_counter += 1
             else:
                 self.puck_receive_counter = 0
 
             if (
+                self.get_clock().now().nanoseconds
+                - self.last_debug_log_ns
+                >= int(0.25e9)
+            ):
+                self.get_logger().info(
+                    'Robot 5 receive gate: '
+                    f'stage_error={receive_stage_error:.3f}/'
+                    f'{self.robot5_receive_stage_tolerance:.3f} m; '
+                    f'puck_to_chassis={puck_to_chassis_distance:.3f} m; '
+                    f'puck_step={puck_motion:.4f}/'
+                    f'{self.puck_motion_epsilon:.4f} m; '
+                    f'counter={self.puck_receive_counter}/'
+                    f'{self.puck_receive_required_cycles}; '
+                    f'puck_has_stopped={puck_has_stopped}; '
+                    f'sim_active={self.puck_simulation_active}; '
+                    f'sim_owned={self.simulated_puck_pose_owned}'
+                )
+                self.last_debug_log_ns = (
+                    self.get_clock().now().nanoseconds
+                )
+
+            if (
                 self.puck_receive_counter
                 >= self.puck_receive_required_cycles
             ):
-                self.transition_to(self.MOVE_R5_TO_GOAL_STAGE)
+                self.get_logger().warning(
+                    'Simulated puck is stopped. Robot 5 is already in the '
+                    'receive/shoot pose, so skipping translation and heading '
+                    'alignment. Starting the Robot-4-style rotational shot.'
+                )
+
+                # First align to the exact clockwise-impact body heading.
+                # Then approach the pre-contact target with the stick behind
+                # the puck; never drive blindly through it.
+                # Robot 5 is already in a usable receive pose. Do not call
+                # navigate_robot_to(), which creates the unwanted circular arc.
+                # Calculate the remaining stick-to-puck distance and move only
+                # straight forward from the current pose.
+                self.robot5_contact_positioned = False
+                self.robot5_contact_target = None
+                self.robot5_contact_stage_target = None
+                self.robot5_contact_impact_heading = None
+                self.transition_to(self.MANUAL_FORWARD_R5)
+                self.begin_robot5_manual_forward()
             return
 
+        # Compatibility-only path. The normal receive sequence bypasses this
+        # state completely and goes directly to MANUAL_FORWARD_R5.
         if self.state == self.MOVE_R5_TO_GOAL_STAGE:
             self.publish_stop(self.robot4)
-            stage_x, stage_y, _ = self.stage_point_behind_puck(
-                self.goal_x,
-                self.goal_y,
+
+            if self.robot5_contact_stage_target is None:
+                self.freeze_robot5_contact_geometry()
+
+            target_x, target_y = self.robot5_contact_stage_target
+            cp_x, cp_y = self.controlled_point(self.robot5)
+            stage_error = math.hypot(
+                target_x - cp_x,
+                target_y - cp_y,
             )
-            success, error = self.navigate_robot_to(
+
+            if stage_error <= self.robot5_contact_stage_tolerance:
+                self.publish_stop(self.robot5)
+                self.get_logger().warning(
+                    'Robot 5 reached the good behind-puck staging pose. '
+                    'Skipping adaptive navigation and moving straight forward.'
+                )
+                self.transition_to(self.MANUAL_FORWARD_R5)
+                self.begin_robot5_manual_forward()
+                return
+
+            self.navigate_robot_to(
                 self.robot5,
-                stage_x,
-                stage_y,
+                target_x,
+                target_y,
+                max_v=self.robot5_contact_stage_max_v,
+                max_w=self.robot5_contact_stage_max_w,
             )
-            if success and error <= self.position_tolerance:
-                self.transition_to(self.ALIGN_R5_TO_GOAL)
+
+            if (
+                self.get_clock().now().nanoseconds
+                - self.last_debug_log_ns
+                >= int(0.20e9)
+            ):
+                self.get_logger().info(
+                    'Robot 5 coarse behind-puck stage: '
+                    f'target=({target_x:.3f},{target_y:.3f}); '
+                    f'controlled_point=({cp_x:.3f},{cp_y:.3f}); '
+                    f'error={stage_error:.3f}/'
+                    f'{self.robot5_contact_stage_tolerance:.3f} m'
+                )
+                self.last_debug_log_ns = (
+                    self.get_clock().now().nanoseconds
+                )
             return
 
         if self.state == self.ALIGN_R5_TO_GOAL:
             self.publish_stop(self.robot4)
-            goal_heading = self.heading_between(
-                self.puck_x,
-                self.puck_y,
-                self.goal_x,
-                self.goal_y,
+
+            desired_heading = (
+                self.robot5_contact_impact_heading
+                if self.robot5_contact_impact_heading is not None
+                else self.robot5_impact_body_heading()
             )
-            aligned, _ = self.align_robot(
+            aligned, heading_error = self.align_robot(
                 self.robot5,
-                goal_heading,
+                desired_heading,
+                max_w=self.robot5_contact_approach_max_w,
             )
-            if aligned:
-                self.transition_to(self.SHOOT_WITH_R5)
-                self.begin_contact_stroke(
-                    self.robot5,
-                    goal_heading,
-                    self.shot_stroke_distance,
+
+            if (
+                self.get_clock().now().nanoseconds
+                - self.last_debug_log_ns
+                >= int(0.25e9)
+            ):
+                self.get_logger().info(
+                    'Robot 5 Robot-4-style stick alignment: '
+                    f'desired={math.degrees(desired_heading):.1f} deg; '
+                    f'error={math.degrees(heading_error):.1f} deg; '
+                    f'positioned={self.robot5_contact_positioned}; '
+                    f'live_goal=({self.goal_x:.3f},{self.goal_y:.3f})'
                 )
+                self.last_debug_log_ns = (
+                    self.get_clock().now().nanoseconds
+                )
+
+            if aligned:
+                if not self.robot5_contact_positioned:
+                    self.transition_to(self.MANUAL_FORWARD_R5)
+                    self.begin_robot5_manual_forward()
+                else:
+                    self.transition_to(self.BACKSWING_R5)
+                    self.begin_robot5_ccw_preload()
+            return
+
+        if self.state == self.MANUAL_FORWARD_R5:
+            self.publish_stop(self.robot4)
+
+            finished, progress, puck_motion = (
+                self.execute_robot5_manual_forward()
+            )
+
+            if (
+                self.get_clock().now().nanoseconds
+                - self.last_debug_log_ns
+                >= int(0.20e9)
+            ):
+                current_puck_distance = math.hypot(
+                    self.puck_x - self.robot5.x,
+                    self.puck_y - self.robot5.y,
+                )
+                self.get_logger().info(
+                    'Robot 5 short forward: '
+                    f'progress={progress:.3f}/'
+                    f'{self.robot5_active_forward_distance:.3f} m; '
+                    f'puck_distance={current_puck_distance:.3f} m; '
+                    f'puck_motion={puck_motion:.3f} m; '
+                    f'left_arc_progress='
+                    f'{math.degrees(max(0.0, wrap_angle(self.robot5.theta - self.robot5_manual_forward_heading))):.1f}/'
+                    f'{math.degrees(self.robot5_forward_left_arc):.1f} deg'
+                )
+                self.last_debug_log_ns = (
+                    self.get_clock().now().nanoseconds
+                )
+
+            if finished:
+                self.robot5_contact_positioned = True
+                self.get_logger().warning(
+                    'Robot 5 short nudge finished. Preserving the current '
+                    'pose and applying the proven Robot 4 preload/strike.'
+                )
+                self.transition_to(self.BACKSWING_R5)
+                self.begin_robot5_ccw_preload()
+            return
+
+        if self.state == self.BACKSWING_R5:
+            self.publish_stop(self.robot4)
+
+            preload_finished, preload_progress = (
+                self.execute_robot5_ccw_preload()
+            )
+
+            if (
+                self.get_clock().now().nanoseconds
+                - self.last_debug_log_ns
+                >= int(0.20e9)
+            ):
+                self.get_logger().info(
+                    'Robot 5 CCW preload: '
+                    f'progress={math.degrees(preload_progress):.1f} deg; '
+                    f'target={math.degrees(self.robot5_preload_angle):.1f} deg; '
+                    f'omega=+{self.robot5_preload_w:.2f} rad/s'
+                )
+                self.last_debug_log_ns = (
+                    self.get_clock().now().nanoseconds
+                )
+
+            if preload_finished:
+                self.transition_to(self.SHOOT_WITH_R5)
+                self.begin_robot5_goal_strike()
             return
 
         if self.state == self.SHOOT_WITH_R5:
             self.publish_stop(self.robot4)
-            finished, _ = self.execute_contact_stroke(self.robot5)
+
+            (
+                finished,
+                clockwise_progress,
+                puck_goal_progress,
+            ) = self.execute_robot5_goal_strike()
+
+            if (
+                self.get_clock().now().nanoseconds
+                - self.last_debug_log_ns
+                >= int(0.20e9)
+            ):
+                self.get_logger().info(
+                    'Robot 5 CW goal strike: '
+                    f'progress='
+                    f'{math.degrees(clockwise_progress):.1f} deg; '
+                    f'omega=-{self.robot5_strike_w:.2f} rad/s; '
+                    f'puck_goal_progress={puck_goal_progress:.3f} m'
+                )
+                self.last_debug_log_ns = (
+                    self.get_clock().now().nanoseconds
+                )
+
             if finished:
+                goal_heading = self.heading_between(
+                    self.puck_x,
+                    self.puck_y,
+                    self.goal_x,
+                    self.goal_y,
+                )
+
+                self.start_puck_motion(
+                    goal_heading,
+                    self.shot_puck_speed,
+                )
+
+                self.transition_to(self.WAIT_FOR_PUCK_AT_GOAL)
+            return
+
+
+        if self.state == self.WAIT_FOR_PUCK_AT_GOAL:
+            self.stop_both()
+
+            if not self.puck_simulation_active:
+                self.get_logger().warning(
+                    'Green puck finished travelling toward the goal.'
+                )
                 self.transition_to(self.COMPLETE)
+
             return
 
         self.stop_both()
@@ -2968,7 +4468,6 @@ def main(args=None) -> None:
 
 if __name__ == '__main__':
     main()
-
 
 PY
 
